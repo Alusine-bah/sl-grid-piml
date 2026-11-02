@@ -1,0 +1,6 @@
+pandapower>=3.0
+numpy
+pandas
+matplotlib
+pytest
+numba
