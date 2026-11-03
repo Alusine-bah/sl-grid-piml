@@ -1,6 +1,6 @@
 """Run the baseline methods and save a results table and chart.
 
-    python scripts\\run_baselines.py --data data\\generated\\freetown_v2.npz
+    python scripts\\run_baselines.py --data data\\generated\\freetown_v3.npz
 
 Writes results/baselines.csv, results/baselines_labels.csv and outputs/baselines.png.
 """
@@ -17,7 +17,7 @@ from slgrid.baselines import PureML, energy_audit, metered_mask
 from slgrid.evaluation import best_threshold, evaluate, split_scenarios
 
 ap = argparse.ArgumentParser()
-ap.add_argument("--data", default="data/generated/freetown_v2.npz")
+ap.add_argument("--data", default="data/generated/freetown_v3.npz")
 args = ap.parse_args()
 
 d = dict(np.load(args.data))

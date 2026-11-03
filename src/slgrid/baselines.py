@@ -7,6 +7,12 @@ B1. Energy audit (rule-based, no training)
     unmetered buses in proportion to their billing, since there is no information to
     say where it is.
 
+B1b. Energy audit + transformer ratings (rule-based, no training)
+    Uses the asset register: physical demand behind a transformer should be roughly
+    proportional to its kVA rating. Expected energy per bus = its share of installed kVA
+    times the feeder-head energy. Buses billing far less than expected are suspicious.
+    Gives good locations but no physics, so its total is not tied to the energy balance.
+
 B2. Pure machine learning (supervised, no physics)
     A gradient-boosted tree model trained on labelled scenarios. Per bus it sees billing
     statistics, the bus's position in the network (depth, path impedance, downstream size)
@@ -52,6 +58,17 @@ def energy_audit(d, s_idx, tech_loss_share: float = 0.03):
     return score, stolen
 
 
+def capacity_audit(d, s_idx, tech_loss_share: float = 0.03, max_share: float = 0.9):
+    """B1b. Returns (score, stolen_MWh), each [S, B]."""
+    billed = d["billing"][s_idx].sum(axis=1)
+    head = d["head"][s_idx, :, 0].sum(axis=1)
+    kva = d["transformer_kva"][s_idx]
+    expected = kva / kva.sum(axis=1, keepdims=True) * head[:, None] * (1 - tech_loss_share)
+    theta = np.clip(expected / billed - 1, 0, max_share / (1 - max_share))
+    stolen = billed * theta
+    return theta / (1 + theta), stolen
+
+
 def ml_features(d, s_idx) -> pd.DataFrame:
     """One row per (scenario, bus). Uses only observed data plus the network layout."""
     topo = bus_features(d["line_from"], d["line_to"], d["line_r_ohm"], d["line_x_ohm"])
@@ -84,6 +101,11 @@ def ml_features(d, s_idx) -> pd.DataFrame:
                 "meter_gap": np.nan,
                 "head_v": head_v[si],
             }
+            if "transformer_kva" in d:
+                kva = d["transformer_kva"][s_idx[si]]
+                expected = kva[b] / kva.sum() * head_e[si]
+                r["billed_per_expected"] = billed[si, b] / expected
+                r["kva_share"] = kva[b] / kva.sum()
             if mm[b]:
                 k = m_cols.index(b)
                 r["meter_gap"] = 1 - billed[si, b] / max(metered_e[si, k], 1e-9)

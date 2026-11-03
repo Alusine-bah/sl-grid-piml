@@ -13,6 +13,7 @@ as EDSA would need to provide for one 11 kV feeder, and how it maps to the array
 | Energy sold per transformer area | Prepaid vending records or billing system, grouped by transformer | daily (monthly also works) | `billing` |
 | Feeder layout | Network map: which transformer connects where | static | `line_from`, `line_to`, `bus_names` |
 | Line types and lengths | Asset register | static | `line_r_ohm`, `line_x_ohm` |
+| Transformer kVA rating at each bus | Asset register | static | `transformer_kva` |
 
 Nothing in this list needs customer smart meters. Missing readings are allowed and are
 stored as NaN.
@@ -32,6 +33,9 @@ Ground truth (simulation only, used for training targets and scoring):
 - `vm_pu` [S, T, N]: voltage at every bus
 - `line_loss` [S, T, L]: technical loss per line, MW
 - `is_theft`, `is_fault` [S, B]: per-bus labels
+
+Asset data:
+- `transformer_kva` [S, B]: installed transformer capacity behind each bus, kVA
 
 Network description:
 - `bus_names`, `all_bus_names`, `meter_names`

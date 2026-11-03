@@ -3,7 +3,7 @@
 Physics-informed machine learning for locating electricity losses (theft and faults)
 on distribution feeders with very few meters, using a Sierra Leone 11 kV feeder as the case study.
 
-**Status:** Phase 4 — baseline methods evaluated. Next: the physics-informed model.
+**Status:** Phase 5 — physics-informed model working and evaluated. Next: meter placement study and edge deployment.
 
 ## Why
 Sierra Leone's distribution utility (EDSA) loses roughly half of the electricity it buys to
@@ -31,7 +31,7 @@ pytest
 python scripts\run_base_powerflow.py
 python scripts\run_freetown_day.py
 python scripts\generate_dataset.py --scenarios 100 --days 7
-python scripts\run_baselines.py
+python scripts\run_experiments.py
 ```
 
 ## Grounded in Sierra Leone data
@@ -61,17 +61,26 @@ Every parameter is traced to a published source in [`docs/sources.md`](docs/sour
 See [`docs/data_format.md`](docs/data_format.md) for the exact data a utility would need to
 provide to run the models on a real feeder.
 
-## Results so far
-Baselines on 25 test scenarios (full log in [`docs/results.md`](docs/results.md)):
+## Results
+On 25 test scenarios (full log in [`docs/results.md`](docs/results.md)):
 
-| Method | Finds theft behind unmetered transformers (AUC) | Error in total stolen energy |
-|---|---|---|
-| Energy audit (standard utility method) | 0.63 | 2.8% |
-| Pure ML (needs 75 labelled weeks) | 0.94 | 12.9% |
+| Method | Theft labels needed | Finds theft at unmetered transformers (AUC) | Error in total stolen energy |
+|---|---|---|---|
+| Energy audit (standard utility method) | none | 0.65 | 3.4% |
+| Audit + transformer ratings | none | 0.90 | 47.7% |
+| Pure ML | 3 labelled weeks | 0.92 | 23.6% |
+| Pure ML | 75 labelled weeks | 0.97 | 12.2% |
+| **Physics-informed (this project)** | **none** | **0.92** | **2.7%** |
 
-The audit gets the total right but cannot say where; pure ML can say where but needs
-labelled theft data that utilities do not have, and gets the amounts wrong. The
-physics-informed model aims to do both without labels.
+With no theft labels, the physics-informed model finds theft as well as machine learning
+trained on three weeks of labelled theft data, and estimates the stolen amount 4-17 times
+more accurately than any other method that can say where the theft is.
+
+**How it works:** for each feeder, it finds the theft pattern that best explains the
+substation meter, a few transformer meters and the billing records, while obeying the
+feeder's power balance and the voltage drop through its real cables (checked against full
+AC power flow). Transformer kVA ratings from the asset register give it a starting guess.
+It runs in about 5 seconds per feeder-week on a laptop.
 
 ## Layout
 - `src/slgrid/feeder.py` — base IEEE 33-bus feeder and the standard feeder format
@@ -83,7 +92,8 @@ physics-informed model aims to do both without labels.
 - `src/slgrid/dataset.py` — labelled dataset generator
 - `src/slgrid/topology.py` — network position features from the line list
 - `src/slgrid/evaluation.py` — common metrics for all methods
-- `src/slgrid/baselines.py` — energy audit and pure ML baselines
+- `src/slgrid/baselines.py` — energy audit, audit + ratings, and pure ML baselines
+- `src/slgrid/physics_model.py` — the physics-informed locator
 - `data/sources/` — data extracted from published sources
 - `docs/sources.md` — citations and how each number is used
 - `scripts/` — runnable experiments

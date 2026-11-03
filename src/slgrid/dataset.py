@@ -15,6 +15,9 @@ Truth (for training targets and scoring only):
   is_fault        [S, B]     bus label
   households      [S, B]     true number of households behind each bus (varies by scenario)
 
+Asset data (known to the utility):
+  transformer_kva [S, B]     installed transformer capacity behind each bus, kVA
+
 What the utility sees:
   head            [S, T, 3]  feeder-head P (MW), Q (MVAr), V (pu)
   meter_p, meter_q, meter_v  [S, T, M]  transformer meters, NaN where missing
@@ -46,6 +49,7 @@ class DatasetConfig:
     meter_buses: tuple[int, ...] = (6, 12, 17, 24, 29, 32)
     dropout: float = 0.2
     customer_spread: float = 0.3   # random variation of customers per bus between scenarios
+    kva_spread: float = 0.35       # how loosely transformer ratings follow actual peak load
     seed: int = 0
 
 
@@ -68,7 +72,7 @@ def generate(cfg: DatasetConfig, out_dir: str | Path, name: str = "dataset",
         return g.T.groupby(level=0).sum().T[bus_cols].values
 
     keys = ["true_bus_p", "theft_bus_p", "fault_bus_p", "vm_pu", "line_loss",
-            "is_theft", "is_fault", "households", "head", "meter_p", "meter_q", "meter_v", "billing"]
+            "is_theft", "is_fault", "households", "transformer_kva", "head", "meter_p", "meter_q", "meter_v", "billing"]
     store = {k: [] for k in keys}
     rows = []
 
@@ -99,6 +103,13 @@ def generate(cfg: DatasetConfig, out_dir: str | Path, name: str = "dataset",
         store["is_fault"].append(lab["is_fault"].values)
         hh = cust.assign(bus=[f"bus_{b}" for b in cust["feeder_bus"]]).groupby("bus")["households"].sum()
         store["households"].append(hh.loc[bus_cols].values)
+        # Installed transformer capacity behind each bus (from an asset register).
+        # Sized to the real peak load (including stolen load, which transformers also
+        # carry) divided by a random loading factor around 0.7, then rounded to 50 kVA.
+        # The spread reflects that many transformers are over- or under-loaded (S6).
+        s_peak = np.sqrt(res["bus_p_mw"][bus_cols] ** 2 + res["bus_q_mvar"][bus_cols] ** 2).max(axis=0).values
+        lf = rng.lognormal(np.log(0.7), cfg.kva_spread, size=len(bus_cols))
+        store["transformer_kva"].append(np.maximum(50.0, np.round(s_peak * 1000 / lf / 50) * 50))
         store["head"].append(obs["head"][["p_mw", "q_mvar", "vm_pu"]].values)
         store["meter_p"].append(obs["meters"]["p_mw"][meter_cols].values)
         store["meter_q"].append(obs["meters"]["q_mvar"][meter_cols].values)
