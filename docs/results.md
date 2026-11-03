@@ -111,17 +111,20 @@ With only 12 scenarios, differences of about 0.01 in AUC are within noise.
 - **Far-end placement gives the steadiest improvement in the total** (2.4% → 1.6%).
   No placement strategy clearly wins on locating, given the noise.
 
-### Robustness (6 meters at default positions; AUC over all buses)
-| Stress | Level | P1 AUC | P1 total error |
+### Robustness (6 meters at default positions; AUC at unmetered buses / total error)
+| Stress | Level | P1 physics-informed | B1c combined rules |
 |---|---|---|---|
-| Missing meter readings | 20% / 50% / 80% | 0.951 / 0.950 / 0.947 | 1.3% / 1.4% / 1.9% |
-| Cable impedance error | 0 / 10% / 25% | 0.951 / 0.950 / 0.950 | 1.3% / 1.7% / 1.8% |
-| Transformer rating error | 0 / 0.2 / 0.4 (log sd) | 0.951 / 0.947 / 0.897 | 1.3% / 1.8% / 2.2% |
+| Missing meter readings | 20% | 0.937 / 1.3% | 0.910 / 3.6% |
+| | 50% | 0.936 / 1.4% | 0.910 / 3.6% |
+| | 80% | 0.934 / 1.9% | 0.909 / 3.6% |
+| Cable impedance error | 10% | 0.934 / 1.7% | 0.910 / 3.6% |
+| | 25% | 0.934 / 1.8% | 0.910 / 3.6% |
+| Transformer rating error | log sd 0.2 | 0.931 / 1.8% | 0.900 / 3.6% |
+| | log sd 0.4 | 0.872 / 2.2% | 0.847 / 3.6% |
 
-For comparison, B1c's AUC at unmetered buses falls from 0.91 to 0.85 at the largest
-rating error.
+P1 keeps its lead over the rule-based method under every stress.
 - **Robust to missing data and wrong cable data:** losing 80% of meter readings or having
   25% cable errors barely changes the result.
 - **Sensitive to the asset register:** a badly out-of-date transformer register (log sd 0.4,
-  ratings often off by 50%) costs about 0.05 AUC, for P1 and the rule-based method alike.
+  ratings often off by 50%) costs about 0.06 AUC, for P1 and the rule-based method alike.
   **Keeping the transformer register accurate matters more than adding meters.**

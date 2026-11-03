@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Finding Electricity Theft</title>
+<meta name="description" content="Locating electricity theft on sparsely metered 11 kV feeders in Sierra Leone, using power-flow physics and data utilities already have.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,500;8..60,700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #f7f5f0;
+  --surface: #ffffff;
+  --ink: #1d2327;
+  --muted: #5b6670;
+  --line: #e2ddd3;
+  --accent: #c2410c;
+  --accent-soft: #fde7da;
+  --green: #1e6b52;
+  --green-soft: #dcefe7;
+  --bar-base: #9aa5ae;
+  --bar-mid: #6b7f8f;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #14181b;
+    --surface: #1c2226;
+    --ink: #e8e6e1;
+    --muted: #9aa6af;
+    --line: #2d353b;
+    --accent: #f08a4b;
+    --accent-soft: #3a2518;
+    --green: #5fc29b;
+    --green-soft: #17302a;
+    --bar-base: #56616a;
+    --bar-mid: #7b8d9b;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #14181b;
+  --surface: #1c2226;
+  --ink: #e8e6e1;
+  --muted: #9aa6af;
+  --line: #2d353b;
+  --accent: #f08a4b;
+  --accent-soft: #3a2518;
+  --green: #5fc29b;
+  --green-soft: #17302a;
+  --bar-base: #56616a;
+  --bar-mid: #7b8d9b;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 400 17px/1.6 Inter, system-ui, -apple-system, Segoe UI, sans-serif;
+}
+.wrap { max-width: 860px; margin: 0 auto; padding: 0 16px; }
+header { padding: 56px 0 32px; border-bottom: 1px solid var(--line); }
+.kicker {
+  font-size: 13px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--accent); margin: 0 0 12px;
+}
+h1, h2, h3 { font-family: "Source Serif 4", Georgia, serif; line-height: 1.2; }
+h1 { font-size: clamp(30px, 6vw, 46px); margin: 0 0 16px; font-weight: 700; }
+h2 { font-size: 26px; margin: 48px 0 12px; }
+h3 { font-size: 19px; margin: 0 0 6px; }
+.lede { font-size: 19px; color: var(--muted); margin: 0; max-width: 680px; }
+.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin: 32px 0 0; }
+.stat { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+.stat b { display: block; font-family: "Source Serif 4", Georgia, serif; font-size: 30px; line-height: 1.1; }
+.stat span { font-size: 14px; color: var(--muted); }
+p { margin: 0 0 14px; }
+.muted { color: var(--muted); }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 20px; margin: 16px 0; }
+.chart h3 { margin-bottom: 2px; }
+.chart .sub { font-size: 14px; color: var(--muted); margin: 0 0 14px; }
+.row { display: grid; grid-template-columns: 210px 1fr; gap: 12px; align-items: center; margin: 8px 0; font-size: 15px; }
+.row .name small { display: block; color: var(--muted); font-size: 12px; }
+.track { position: relative; height: 26px; background: transparent; }
+.bar {
+  height: 100%; border-radius: 4px; background: var(--bar-base);
+  display: flex; align-items: center; justify-content: flex-end; padding-right: 8px;
+  color: #fff; font-size: 13px; font-weight: 600; min-width: 44px;
+}
+.bar.mid { background: var(--bar-mid); }
+.bar.ours { background: var(--accent); }
+.bar.ml { background: transparent; border: 2px dashed var(--bar-mid); color: var(--ink); }
+.axis { display: grid; grid-template-columns: 210px 1fr; gap: 12px; font-size: 12px; color: var(--muted); }
+.axis div:last-child { display: flex; justify-content: space-between; }
+.findings { display: grid; gap: 12px; margin: 16px 0; counter-reset: f; }
+.finding { background: var(--surface); border: 1px solid var(--line); border-left: 4px solid var(--green); border-radius: 10px; padding: 16px 18px; }
+.finding.warn { border-left-color: var(--accent); }
+.finding p { margin: 0; color: var(--muted); font-size: 16px; }
+table { width: 100%; border-collapse: collapse; font-size: 15px; }
+th, td { text-align: left; padding: 9px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-weight: 600; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+td.num, th.num { text-align: right; white-space: nowrap; }
+tr.ours td { background: var(--accent-soft); font-weight: 600; }
+.scroll { overflow-x: auto; }
+.steps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 16px 0; }
+.step { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px; font-size: 14px; }
+.step b { display: block; font-size: 13px; color: var(--accent); margin-bottom: 4px; }
+ul.plain { padding-left: 20px; margin: 0 0 14px; }
+ul.plain li { margin: 4px 0; }
+.note { background: var(--green-soft); border-radius: 10px; padding: 14px 16px; font-size: 15px; }
+a { color: var(--accent); }
+footer { margin: 56px 0 0; padding: 24px 0 48px; border-top: 1px solid var(--line); font-size: 14px; color: var(--muted); }
+code { font-size: 14px; background: var(--surface); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .bar.ours { color: #2a1206; }
+}
+:root[data-theme="dark"] .bar.ours { color: #2a1206; }
+@media (max-width: 640px) {
+  .stats { grid-template-columns: 1fr; }
+  .steps { grid-template-columns: 1fr 1fr; }
+  .row, .axis { grid-template-columns: 1fr; gap: 4px; }
+  .axis div:first-child { display: none; }
+  .row { margin: 12px 0; }
+}
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <p class="kicker">Sierra Leone · 11 kV distribution · Physics-informed estimation</p>
+    <h1>Finding where electricity is stolen, with the meters a utility already has</h1>
+    <p class="lede">A simulation study of a Freetown-style feeder: how well can a utility locate theft
+      behind transformers that have no meter, using its substation meter, billing records,
+      transformer register and the physics of its own network?</p>
+    <div class="stats">
+      <div class="stat"><b>30–53%</b><span>of electricity bought by Sierra Leone's utility is lost, depending on source and year</span></div>
+      <div class="stat"><b>26 of 32</b><span>transformers on the test feeder have no meter, as is typical</span></div>
+      <div class="stat"><b>0 labels</b><span>needed: no records of where theft was found</span></div>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+
+<h2>The problem</h2>
+<p>Sierra Leone's Electricity Distribution and Supply Authority (EDSA) loses a large share of the
+power it buys to technical losses and theft. Published estimates range from 30% to 53%. Knowing that
+energy is missing on a feeder is easy: compare the substation meter with what was billed.
+<strong>Knowing where it goes is hard</strong>, because most distribution transformers have no meter.</p>
+<p>Many machine-learning theft detectors need customer smart meters and years of confirmed theft cases.
+EDSA has neither. This project asks what can be done with data it already holds.</p>
+
+<h2>What was built</h2>
+<div class="steps">
+  <div class="step"><b>1 · Feeder</b>An 11 kV radial feeder with real Freetown cable constants and substation transformers (JICA, 2009)</div>
+  <div class="step"><b>2 · Demand</b>12,000 households with hourly use from a 2023 Freetown survey (Rogers et al., 2024)</div>
+  <div class="step"><b>3 · Theft</b>15–35% of energy stolen at hotspot transformers; cable faults in some weeks</div>
+  <div class="step"><b>4 · Utility view</b>Substation meter, 6 noisy transformer meters with gaps, daily billing</div>
+</div>
+<p>On 100 simulated weeks, five methods were compared on 25 weeks held back for testing. The
+physics-informed method finds, for each feeder separately, the theft pattern that best explains the
+measurements while obeying power balance and the voltage drop through the feeder's real cables,
+checked against full AC power flow.</p>
+
+<h2>Results</h2>
+
+<div class="card chart">
+  <h3>Locating theft at transformers without a meter</h3>
+  <p class="sub">Area under the ROC curve: 0.5 is a coin toss, 1.0 is perfect</p>
+  <div class="row"><div class="name">Energy audit<small>today's standard method</small></div>
+    <div class="track"><div class="bar" style="width:calc((0.65 - 0.5) / 0.5 * 100%)">0.65</div></div></div>
+  <div class="row"><div class="name">Combined rules<small>transformer register + feeder gap</small></div>
+    <div class="track"><div class="bar mid" style="width:calc((0.90 - 0.5) / 0.5 * 100%)">0.90</div></div></div>
+  <div class="row"><div class="name">Physics-informed<small>this project, no labels</small></div>
+    <div class="track"><div class="bar ours" style="width:calc((0.92 - 0.5) / 0.5 * 100%)">0.92</div></div></div>
+  <div class="row"><div class="name">Machine learning<small>needs 3 weeks of confirmed theft</small></div>
+    <div class="track"><div class="bar ml" style="width:calc((0.92 - 0.5) / 0.5 * 100%)">0.92</div></div></div>
+  <div class="row"><div class="name">Machine learning<small>needs 75 weeks of confirmed theft</small></div>
+    <div class="track"><div class="bar ml" style="width:calc((0.97 - 0.5) / 0.5 * 100%)">0.97</div></div></div>
+  <div class="axis"><div></div><div><span>0.5</span><span>0.75</span><span>1.0</span></div></div>
+</div>
+
+<div class="card scroll">
+  <table>
+    <thead><tr><th>Method</th><th>Theft labels</th><th class="num">Locating (AUC)</th><th class="num">Error per transformer</th><th class="num">Error in total stolen</th></tr></thead>
+    <tbody>
+      <tr><td>Energy audit</td><td>none</td><td class="num">0.65</td><td class="num">4.30 MWh</td><td class="num">3.4%</td></tr>
+      <tr><td>Combined rules</td><td>none</td><td class="num">0.90</td><td class="num">2.44 MWh</td><td class="num">3.4%</td></tr>
+      <tr><td>Machine learning</td><td>3 weeks</td><td class="num">0.92</td><td class="num">3.39 MWh</td><td class="num">23.6%</td></tr>
+      <tr><td>Machine learning</td><td>75 weeks</td><td class="num">0.97</td><td class="num">1.79 MWh</td><td class="num">12.2%</td></tr>
+      <tr class="ours"><td>Physics-informed</td><td>none</td><td class="num">0.92</td><td class="num">2.11 MWh</td><td class="num">2.7%</td></tr>
+    </tbody>
+  </table>
+  <p class="muted" style="margin:10px 0 0;font-size:14px">Errors are per transformer area over one week, and for the whole feeder over one week. 25 test weeks.</p>
+</div>
+
+<h2>Findings</h2>
+<div class="findings">
+  <div class="finding"><h3>The biggest win needs no new hardware</h3>
+    <p>Combining the transformer register (where demand should be) with the substation meter (how much
+    is missing) lifts theft localisation at unmetered transformers from 0.65 to 0.90 compared with a
+    plain energy audit.</p></div>
+  <div class="finding"><h3>Physics adds a consistent further gain, without labels</h3>
+    <p>The best label-free localisation, 14% lower error per transformer and the most accurate total of
+    any method that can locate theft. It matches machine learning trained on three weeks of confirmed
+    theft, which the utility does not have.</p></div>
+  <div class="finding"><h3>Robust to messy field data</h3>
+    <p>Losing 80% of transformer-meter readings, or 25% errors in cable data, barely changes the result
+    (AUC 0.937 → 0.934).</p></div>
+  <div class="finding warn"><h3>Keep the transformer register accurate</h3>
+    <p>A badly out-of-date register (ratings often off by 50%) costs about 0.06 AUC for every method.
+    Fixing the register matters more than buying extra meters: going from 0 to 6 well-placed
+    transformer meters improves localisation by only about 0.015.</p></div>
+  <div class="finding warn"><h3>Limitation: faults versus theft</h3>
+    <p>Small cable faults are hard to tell apart from heavy theft (AUC 0.68). All results come from
+    simulation calibrated to published Freetown data, not from field measurements.</p></div>
+</div>
+
+<h2>Running it on a real feeder</h2>
+<p>The code reads one standard data format, so a real feeder can replace the simulator without
+changing the method. For one 11 kV feeder, it needs:</p>
+<ul class="plain">
+  <li>Hourly P, Q and voltage at the substation 11 kV breaker</li>
+  <li>Hourly readings from any transformer check meters (gaps are fine)</li>
+  <li>Energy sold per transformer area, per day or month (prepaid vending or billing)</li>
+  <li>The feeder layout, line types and lengths, and transformer kVA ratings</li>
+</ul>
+<p class="note">No customer smart meters are needed. A first real-feeder test would show whether the
+simulated results hold, and would replace the simulated weeks with real ones.</p>
+
+<h2>Sources</h2>
+<ul class="plain muted" style="font-size:15px">
+  <li>Rogers, Diawuo &amp; Domfeh (2024), Freetown household appliance survey, <em>Int. J. Energy Research</em>.</li>
+  <li>Mansaray, Diawuo &amp; Bantinge (2024), Freetown distribution network model, <em>Solar Compass</em>.</li>
+  <li>JICA &amp; Yachiyo Engineering (2009), Master Plan Study on Power Supply in Western Area, Sierra Leone.</li>
+  <li>Trimble et al. (2016), World Bank WP 7788; Kourouma &amp; Camara (2026), <em>Phys. Sci. Int. J.</em>; Kamara et al. (2021), IEOM.</li>
+</ul>
+<p class="muted" style="font-size:15px">Every parameter and how it is used: <a href="https://github.com/Alusine-bah/sl-grid-piml/blob/main/docs/sources.md">docs/sources.md</a>.
+Full results, including a corrected earlier claim: <a href="https://github.com/Alusine-bah/sl-grid-piml/blob/main/docs/results.md">docs/results.md</a>.</p>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    Code, data sources and tests: <a href="https://github.com/Alusine-bah/sl-grid-piml">github.com/Alusine-bah/sl-grid-piml</a>.
+    Built in Python with pandapower, NumPy, SciPy and scikit-learn. All results are reproducible with the commands in the README.
+  </div>
+</footer>
+</body>
+</html>

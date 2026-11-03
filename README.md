@@ -1,7 +1,9 @@
 # sl-grid-piml
 
-Physics-informed machine learning for locating electricity losses (theft and faults)
+Physics-informed estimation for locating electricity losses (theft and faults)
 on distribution feeders with very few meters, using a Sierra Leone 11 kV feeder as the case study.
+
+**Project page:** https://alusine-bah.github.io/sl-grid-piml/
 
 **Status:** Phase 6 — physics-informed model, baselines, meter placement and robustness studies complete.
 
