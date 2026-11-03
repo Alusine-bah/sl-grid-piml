@@ -105,6 +105,11 @@ def feeder_map(d: dict, res: pd.DataFrame, names: dict | None, show_truth: bool)
     text = alt.Chart(load).mark_text(dy=-16, fontSize=10, color="#555").encode(
         x="x:Q", y="y:Q", text="name:N")
     layers = [lines, pts, sub, text]
+    fsec = load[load.in_fault_section.fillna(False).astype(bool)]
+    if len(fsec):
+        layers.append(alt.Chart(fsec).mark_point(shape="diamond", size=520, filled=False,
+                                                 color="#1d4ed8", strokeWidth=2.5).encode(
+            x="x:Q", y="y:Q"))
     if show_truth:
         ring = alt.Chart(load[load.true_hotspot.fillna(False).astype(bool)]).mark_point(
             shape="circle", size=900, filled=False, color="#1e6b52", strokeWidth=2).encode(
@@ -122,13 +127,39 @@ def inspection_table(res: pd.DataFrame, names: dict | None, show_truth: bool) ->
         "Billed (MWh)": res.billed_mwh.round(2),
         "Est. stolen (MWh)": res.stolen_physics_mwh.round(2),
         "Est. stolen share": (100 * res.share_physics).round(0).astype(int).astype(str) + "%",
-        "Possible leak (kW)": res.leak_kw.round(0).astype(int).replace(0, ""),
+        "Fault probability": np.where(res.fault_prob > 0.005,
+                                      (100 * res.fault_prob).round(0).astype(int).astype(str) + "%", ""),
     })
     if show_truth:
         t["True stolen (MWh)"] = res.true_stolen_mwh.round(2)
         t["Truth"] = np.where(res.true_hotspot, "theft",
                               np.where(res.true_fault, "fault", "clean"))
     return t
+
+
+def fault_alert(d, res, names, show_truth):
+    f = res.attrs.get("fault", {})
+    if f.get("detected"):
+        h = f["start_hour"]
+        sec = ", ".join(label(b, names) for b in f["likely_section"])
+        st.warning(f"**Possible cable fault.** A constant resistive leak of about "
+                   f"**{f['leak_kw']:.0f} kW** appeared at **hour {h}** (day {h // 24 + 1}, "
+                   f"{h % 24:02d}:00) and stayed. Unlike theft, it draws no reactive power. "
+                   f"Most likely section (80% confidence): buses **{sec}**. "
+                   "Marked with blue diamonds on the map.", icon="⚠️")
+    else:
+        st.info("No new cable fault detected in this period (no lasting step in resistive load "
+                "at the substation). Fault detection works best with a week or more of data; "
+                "small faults in short periods can be missed.", icon="✅")
+    if show_truth and "true_fault" in res:
+        tf = res[res.true_fault]
+        if len(tf):
+            j = d["bus_names"].tolist().index(tf.bus.iloc[0])
+            fp = d["fault_bus_p"][0, :, j]
+            st.caption(f"Truth (simulation only): a {1000 * fp.max():.0f} kW fault at bus "
+                       f"{label(tf.bus.iloc[0], names)} starting at hour {int(np.argmax(fp > 0))}.")
+        else:
+            st.caption("Truth (simulation only): no fault in this period.")
 
 
 def results_view(d, res, names, show_truth, key):
@@ -149,9 +180,12 @@ def results_view(d, res, names, show_truth, key):
                     f"{100 * s['stolen_physics'] / s['head_mwh']:.0f}% of energy in", delta_color="off")
         c[3].metric("Transformer meters", f"{s['n_meters']} of {s['n_buses']}")
 
+    fault_alert(d, res, names, show_truth)
+
     st.subheader("Feeder map")
     cap = ("Colour = estimated share of consumption stolen. Size = transformer kVA. "
-           "Squares have a transformer meter. Triangle = substation.")
+           "Squares have a transformer meter. Triangle = substation. "
+           "Blue diamonds = likely section of a detected cable fault.")
     if show_truth:
         cap += " Green rings = true theft hotspots (known only in simulation)."
     st.caption(cap)
@@ -159,8 +193,8 @@ def results_view(d, res, names, show_truth, key):
 
     st.subheader("Inspection list")
     st.caption("Transformer areas ranked by estimated stolen energy. Send inspection crews "
-               "down the list. 'Possible leak' flags a constant loss that looks more like a "
-               "cable fault than theft.")
+               "down the list. 'Fault probability' shows where a detected cable fault most "
+               "likely is (for the maintenance team).")
     table = inspection_table(res, names, show_truth)
     st.dataframe(table, hide_index=True, width="stretch", height=380, key=f"{key}_tbl")
     st.download_button("Download inspection list (CSV)", table.to_csv(index=False).encode(),
@@ -426,9 +460,17 @@ everything the utility measures, while obeying the physics of the network:
 Losses and voltage corrections come from a full AC power flow, so the answer is consistent
 with the non-linear network physics. It needs no records of past theft.
 
+**Theft or cable fault?** Stolen power is ordinary household load: it draws real and reactive
+power in the usual ratio. A failing cable joint draws real power only. So the substation's
+"real power minus what reactive power implies" is blind to theft but steps up when a fault
+starts. The app scans for that step to find the start hour and leak size, then uses the step
+it causes in each transformer meter's voltage to estimate where the fault is. In tests it
+caught 28 of 30 faults with no false alarms in 30 clean weeks.
+
 **Honest limits.** All results so far come from simulation calibrated to published Freetown
-data. Small cable faults are hard to tell apart from heavy theft. An out-of-date transformer
-register reduces accuracy for every method.
+data. Fault location is to a section of the feeder (typically 8 of 32 buses), not one exact
+transformer. A fault already present at the start of the data shows no step and is not
+detected. An out-of-date transformer register reduces accuracy for every method.
 
 **Code and sources:** [github.com/Alusine-bah/sl-grid-piml](https://github.com/Alusine-bah/sl-grid-piml)
 """)

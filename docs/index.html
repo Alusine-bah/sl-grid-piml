@@ -219,9 +219,13 @@ checked against full AC power flow.</p>
     <p>A badly out-of-date register (ratings often off by 50%) costs about 0.06 AUC for every method.
     Fixing the register matters more than buying extra meters: going from 0 to 6 well-placed
     transformer meters improves localisation by only about 0.015.</p></div>
-  <div class="finding warn"><h3>Limitation: faults versus theft</h3>
-    <p>Small cable faults are hard to tell apart from heavy theft (AUC 0.68). All results come from
-    simulation calibrated to published Freetown data, not from field measurements.</p></div>
+  <div class="finding"><h3>Cable faults are told apart from theft</h3>
+    <p>A leaking cable draws real power but no reactive power, unlike stolen household load. A
+    detector built on this caught 28 of 30 faults with no false alarms in 30 clean weeks, timed
+    each start to the hour, and narrowed the location to a section of about 8 of 32 transformers.</p></div>
+  <div class="finding warn"><h3>Limitation: simulation only</h3>
+    <p>All results come from simulation calibrated to published Freetown data, not from field
+    measurements. A test on one real feeder is the next step.</p></div>
 </div>
 
 <h2>Running it on a real feeder</h2>

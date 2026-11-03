@@ -63,6 +63,7 @@ class PhysicsConfig:
     max_theta: float = 9.0          # stolen share at most 90%
     max_fault_mw: float = 0.3
     ac_iterations: int = 2
+    detect_faults: bool = False     # use the fault detector (slgrid.faults) to time faults
     window_hours: int | None = None # sum equations over windows of this length (None = whole run)
     agg_power: float = 1.0          # 1.0 = errors within a window treated as fully correlated
 
@@ -109,6 +110,10 @@ class PhysicsInformedLocator:
         self.ZX = (A * d["line_x_ohm"]) @ A.T / V_KV ** 2
         self.tan = np.tan(np.arccos(self.cfg.power_factor))
         self.net = _network(d)
+        self.fd = None
+        if self.cfg.detect_faults:
+            from slgrid.faults import FaultConfig, FaultDetector
+            self.fd = FaultDetector(d, FaultConfig(power_factor=self.cfg.power_factor))
 
     # --- helpers -------------------------------------------------------------
     def _hourly_billed(self, s):
@@ -180,6 +185,27 @@ class PhysicsInformedLocator:
         hours = np.arange(T)
         grp = hours // cfg.window_hours if cfg.window_hours else np.zeros(T, dtype=int)
 
+        # Fault handling. Without the detector, a leak may be present at any bus all period.
+        # With it: if a new fault is detected, leaks start at the detected hour, the period
+        # is split into before/after so the step is visible, and the total leak and its
+        # likely location come from the detector; if none is detected, no leak is fitted.
+        fault_on = np.ones(T)
+        fault_w = np.full(B, cfg.fault_weight)
+        fault_ub = np.full(B, cfg.max_fault_mw)
+        fault_sum = None
+        fault = None
+        if self.fd is not None:
+            fault = self.fd.analyse(s)
+            if fault["detected"]:
+                fault_on = (hours >= fault["start_hour"]).astype(float)
+                grp = grp * 2 + fault_on.astype(int)
+                p = fault["bus_prob"]
+                fault_w = cfg.fault_weight * (1.0 - p / p.max()) + 1.0
+                c_hat = max(fault["leak_kw"], 0.0) / 1000
+                fault_sum = (c_hat, max(0.2 * c_hat, 0.01))
+            else:
+                fault_ub = np.full(B, 1e-9)
+
         for it in range(cfg.ac_iterations + 1):
             blocks, rhs = [], []
 
@@ -188,7 +214,7 @@ class PhysicsInformedLocator:
                 blocks.append(Ag); rhs.append(yg)
 
             # 1. active power balance
-            A = np.zeros((T, n)); A[:, i_th] = b; A[:, i_c] = 1.0
+            A = np.zeros((T, n)); A[:, i_th] = b; A[:, i_c] = fault_on[:, None]
             add(A, head_p - b.sum(1) - loss_p, grp, cfg.sd_head_p)
             # 2. reactive power balance
             A = np.zeros((T, n)); A[:, i_th] = self.tan * b; A[:, i_q0] = 1.0
@@ -198,7 +224,7 @@ class PhysicsInformedLocator:
                 ok = ~np.isnan(vm[:, k])
                 A = np.zeros((ok.sum(), n))
                 A[:, i_th] = K[m] * b[ok]
-                A[:, i_c] = self.ZR[m]
+                A[:, i_c] = fault_on[ok, None] * self.ZR[m]
                 A[:, 2 * B + 1 + k] = 1.0
                 drop = v_head[ok] - vm[ok, k] - v_corr[ok, k] - b[ok] @ K[m]
                 add(A, drop, grp[ok], cfg.sd_voltage)
@@ -206,7 +232,7 @@ class PhysicsInformedLocator:
             for k, m in enumerate(self.m_idx):
                 ok = ~np.isnan(mp[:, k])
                 sdp = cfg.sd_meter * max(np.nanmean(mp[:, k]), 1e-3)
-                A = np.zeros((ok.sum(), n)); A[:, m] = b[ok, m]; A[:, B + m] = 1.0
+                A = np.zeros((ok.sum(), n)); A[:, m] = b[ok, m]; A[:, B + m] = fault_on[ok]
                 add(A, mp[ok, k] - b[ok, m], grp[ok], sdp)
                 sdq = cfg.sd_meter * max(np.nanmean(mq[:, k]), 1e-3)
                 A = np.zeros((ok.sum(), n)); A[:, m] = self.tan * b[ok, m]
@@ -214,27 +240,30 @@ class PhysicsInformedLocator:
             # priors: theta near the feeder average, leakage near zero, small offsets
             A = np.zeros((B, n)); A[:, i_th] = np.eye(B) / prior_sd[:, None]
             blocks.append(A); rhs.append(theta_prior / prior_sd)
-            A = np.zeros((B, n)); A[:, i_c] = np.eye(B) * cfg.fault_weight
+            A = np.zeros((B, n)); A[:, i_c] = np.diag(fault_w)
             blocks.append(A); rhs.append(np.zeros(B))
+            if fault_sum is not None:
+                A = np.zeros((1, n)); A[0, i_c] = 1.0 / fault_sum[1]
+                blocks.append(A); rhs.append(np.array([fault_sum[0] / fault_sum[1]]))
             A = np.zeros((M, n)); A[:, i_v] = np.eye(M) / cfg.sd_offset
             blocks.append(A); rhs.append(np.zeros(M))
 
             Amat, y = np.vstack(blocks), np.concatenate(rhs)
             lb = np.concatenate([np.zeros(2 * B), [-np.inf], np.full(M, -np.inf)])
-            ub = np.concatenate([np.full(B, cfg.max_theta), np.full(B, cfg.max_fault_mw),
+            ub = np.concatenate([np.full(B, cfg.max_theta), fault_ub,
                                  [np.inf], np.full(M, np.inf)])
             sol = lsq_linear(Amat, y, bounds=(lb, ub), method="trf", lsmr_tol="auto")
             theta, c = sol.x[i_th], sol.x[i_c]
 
             if it < cfg.ac_iterations:
-                P = b * (1 + theta) + c
+                P = b * (1 + theta) + fault_on[:, None] * c
                 Q = b * (1 + theta) * self.tan
                 loss_p, loss_q, v_corr = self._ac_corrections(P, Q, v_head)
 
         stolen = (b * theta).sum(axis=0)                 # MWh over the scenario
         score = theta / (1 + theta)
         return {"theta": theta, "fault_mw": c, "score": score, "stolen": stolen,
-                "q0": sol.x[i_q0], "v_off": sol.x[i_v]}
+                "q0": sol.x[i_q0], "v_off": sol.x[i_v], "fault": fault}
 
     def predict(self, s_idx, n_jobs: int = 1):
         """Fit every scenario in s_idx. n_jobs > 1 runs scenarios in parallel processes."""

@@ -152,3 +152,51 @@ Reproduce with `python scripts/run_billing_study.py`.
 - **Practical advice:** analyse a month or more at a time. Token-timing error shrinks as the
   period gets longer.
 - The physics-informed model keeps its lead over the rule-based method at every level.
+
+## Phase 8: telling cable faults apart from theft
+
+Earlier, small cable faults (40-150 kW) were hard to separate from theft (fault-location AUC
+0.57-0.68). A dedicated detector was added (`src/slgrid/faults.py`).
+
+**Idea.** Stolen power is household load: it draws real and reactive power in the usual
+ratio (power factor about 0.9). A failing cable joint draws real power only. So at the
+substation, z = P - Q / tan(phi) is blind to legitimate and stolen load, and steps up when
+a fault starts. The detector scans every possible start hour for a lasting step in z
+(allowing for network losses), then locates the fault from the step it causes in each
+transformer meter's voltage drop, through the real cable resistances.
+
+**Data.** Two new datasets of 60 feeder-weeks, half with a fault at a random bus and hour:
+development (seed 101) and a held-out test set (seed 202). The detection threshold (4.0)
+was chosen on development data, where clean weeks never scored above 3.4. Reproduce with
+`python scripts/run_fault_study.py`.
+
+| | Development | Test (held out) |
+|---|---|---|
+| Faults detected | 20 / 23 | **28 / 30** |
+| False alarms in clean weeks | 0 / 37 | **0 / 30** |
+| Detection AUC | 0.974 | 0.998 |
+| Start-hour error (median) | 0 h | 0 h |
+| Leak-size error (median) | 13% | 7% |
+| Fault-location AUC | 0.873 | **0.911** |
+| True bus ranked first / in top 3 | 30% / 50% | 46% / 61% |
+| True bus inside the reported 80% section | 80% | 79% |
+| Section size (median) | 10.5 buses | 7.5 buses |
+| Theft total error without / with detector | 4.3% / 1.8% | 4.9% / **2.1%** |
+| Theft AUC at unmetered buses without / with | 0.927 / 0.930 | 0.935 / 0.939 |
+
+- **Faults are now detected reliably and timed exactly**, with no false alarms in 67 clean weeks.
+- **Location is to a section, not a single transformer:** six meters cannot separate
+  neighbouring buses, whose voltage signatures differ by about as much as meter noise.
+  The reported 80% section contains the true bus 79-80% of the time, so its confidence
+  is honest.
+- **Theft estimates improve too:** knowing when a leak started stops it being counted as
+  theft, halving the error in total stolen energy on fault weeks.
+- **Missed faults** start in the first or last few hours of the data, where there is too
+  little before/after data to see a step. A fault already present when the data starts
+  cannot be detected this way. Small faults in short periods (for example 50 kW in 3 days)
+  can also be missed.
+- **Assumption:** loads keep a steady power factor. A real feeder whose load mix changes
+  through the day would need hour-of-day terms in the detector; to be checked on real data.
+
+The main experiments (Phases 5-7) use the model without the detector, so their numbers are
+unchanged. The app uses the detector.

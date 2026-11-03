@@ -42,6 +42,8 @@ data can replace the simulator later without changing the models.
   comparison of methods.
 - Billing can be daily, or one total per transformer area for the period (monthly bills or
   prepaid token sales).
+- A **cable-fault alert** gives the start hour, leak size and likely section of a new fault,
+  marked on the map, so the tool serves the maintenance team as well as the revenue team.
 
 Run it locally with `streamlit run app.py`.
 
@@ -58,6 +60,7 @@ python scripts\generate_dataset.py --scenarios 100 --days 7
 python scripts\run_experiments.py
 python scripts\run_studies.py
 python scripts\run_billing_study.py
+python scripts\run_fault_study.py
 ```
 
 ## Grounded in Sierra Leone data
@@ -112,7 +115,11 @@ On 25 test scenarios (full log, including a corrected earlier claim, in [`docs/r
 4. **Works with monthly bills and prepaid sales.** One billing total per transformer area for
    the period locates theft as well as daily figures (AUC 0.915 vs 0.916). Billing errors of
    10-20% mainly reduce accuracy of the stolen *amount*, not of its location.
-5. **Limitation:** small cable faults are hard to separate from heavy theft (AUC 0.68).
+5. **Tells cable faults apart from theft.** A leaking cable draws real power but no reactive
+   power, unlike stolen household load. A detector built on this caught 28 of 30 faults with
+   no false alarms in 30 clean weeks (held-out test), timed their start to the hour, and
+   narrowed the location to a section of about 8 of 32 buses (location AUC 0.91, up from
+   0.57-0.68).
 
 **How it works:** for each feeder, it finds the theft pattern that best explains the
 substation meter, a few transformer meters and the billing records, while obeying the
@@ -133,6 +140,7 @@ per feeder-week on a laptop.
 - `src/slgrid/baselines.py` — energy audit, ratings rules, and pure ML baselines
 - `src/slgrid/physics_model.py` — the physics-informed locator
 - `src/slgrid/studies.py` — meter placement and robustness helpers
+- `src/slgrid/faults.py` — cable-fault detector (start time, size, location)
 - `src/slgrid/io.py` — reads and checks a utility's own feeder files
 - `src/slgrid/app_core.py` — back end of the app (simulate, locate, feeder layout)
 - `app.py` — the interactive app

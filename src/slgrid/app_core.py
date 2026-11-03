@@ -41,8 +41,10 @@ def locate(d: dict, power_factor: float = 0.90, tech_loss: float = 0.03) -> pd.D
     idx = np.array([0])
     _, st_audit = energy_audit(d, idx, tech_loss)
     _, st_rules = combined_rules(d, idx, tech_loss)
-    phys = PhysicsInformedLocator(d, PhysicsConfig(ac_iterations=1, power_factor=power_factor))
+    phys = PhysicsInformedLocator(d, PhysicsConfig(ac_iterations=1, power_factor=power_factor,
+                                                   detect_faults=True))
     fit = phys.fit_scenario(0)
+    fault = fit["fault"]
 
     billed = d["billing"][0].sum(axis=0)
     mm = metered_mask(d)
@@ -54,6 +56,9 @@ def locate(d: dict, power_factor: float = 0.90, tech_loss: float = 0.03) -> pd.D
         "stolen_physics_mwh": fit["stolen"],
         "share_physics": fit["score"],
         "leak_kw": fit["fault_mw"] * 1000,
+        "fault_prob": fault["bus_prob"] if fault["detected"] else np.zeros(len(billed)),
+        "in_fault_section": [str(b) in fault["likely_section"] and fault["detected"]
+                             for b in d["bus_names"]],
         "stolen_rules_mwh": st_rules[0],
         "stolen_audit_mwh": st_audit[0],
     })
@@ -66,6 +71,8 @@ def locate(d: dict, power_factor: float = 0.90, tech_loss: float = 0.03) -> pd.D
         out["true_fault"] = d["is_fault"][0].astype(bool)
     out = out.sort_values("stolen_physics_mwh", ascending=False).reset_index(drop=True)
     out.insert(0, "rank", range(1, len(out) + 1))
+    out.attrs["fault"] = {k: fault[k] for k in ("detected", "score", "start_hour", "leak_kw",
+                                                 "likely_section")}
     return out
 
 
