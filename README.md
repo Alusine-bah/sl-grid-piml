@@ -38,7 +38,10 @@ data can replace the simulator later without changing the models.
   `data/example_feeder/` and can be downloaded from the app.
 - Both modes give a **feeder map** coloured by suspected theft, a ranked **inspection list**
   (downloadable), an **inspection plan** (how much stolen energy the top N areas cover), the
-  **revenue at stake**, and a comparison of methods.
+  **revenue at stake** (in US dollars or 14 other currencies, with live exchange rates), and a
+  comparison of methods.
+- Billing can be daily, or one total per transformer area for the period (monthly bills or
+  prepaid token sales).
 
 Run it locally with `streamlit run app.py`.
 
@@ -54,6 +57,7 @@ python scripts\run_freetown_day.py
 python scripts\generate_dataset.py --scenarios 100 --days 7
 python scripts\run_experiments.py
 python scripts\run_studies.py
+python scripts\run_billing_study.py
 ```
 
 ## Grounded in Sierra Leone data
@@ -105,7 +109,10 @@ On 25 test scenarios (full log, including a corrected earlier claim, in [`docs/r
 3. **Robust where it matters for Sierra Leone:** losing 80% of meter readings or 25% errors
    in cable data barely affect it. An out-of-date transformer register hurts every method,
    so **keeping the asset register accurate matters more than buying extra meters.**
-4. **Limitation:** small cable faults are hard to separate from heavy theft (AUC 0.68).
+4. **Works with monthly bills and prepaid sales.** One billing total per transformer area for
+   the period locates theft as well as daily figures (AUC 0.915 vs 0.916). Billing errors of
+   10-20% mainly reduce accuracy of the stolen *amount*, not of its location.
+5. **Limitation:** small cable faults are hard to separate from heavy theft (AUC 0.68).
 
 **How it works:** for each feeder, it finds the theft pattern that best explains the
 substation meter, a few transformer meters and the billing records, while obeying the

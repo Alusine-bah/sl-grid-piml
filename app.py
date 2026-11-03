@@ -5,7 +5,9 @@ Run locally:   streamlit run app.py
 from __future__ import annotations
 
 import io
+import json
 import sys
+import urllib.request
 import zipfile
 from pathlib import Path
 
@@ -26,12 +28,32 @@ ORANGE = "#c2410c"
 GREY = "#8a959e"
 EXAMPLE_DIR = ROOT / "data" / "example_feeder"
 FILES = ["lines", "transformers", "head", "meters", "billing"]
+CURRENCIES = {
+    "USD": "US dollar", "SLE": "Sierra Leonean leone", "EUR": "Euro", "GBP": "British pound",
+    "GHS": "Ghanaian cedi", "NGN": "Nigerian naira", "LRD": "Liberian dollar",
+    "GNF": "Guinean franc", "XOF": "West African CFA franc", "GMD": "Gambian dalasi",
+    "KES": "Kenyan shilling", "ZAR": "South African rand", "BDT": "Bangladeshi taka",
+    "INR": "Indian rupee", "CNY": "Chinese yuan",
+}
 
 
 # ----------------------------------------------------------------------------- helpers
+@st.cache_data(ttl=6 * 3600, show_spinner=False)
+def usd_rates():
+    """Latest USD exchange rates from a free public service (open.er-api.com).
+    Returns (rates, last_update) or (None, None) if the service cannot be reached."""
+    try:
+        with urllib.request.urlopen("https://open.er-api.com/v6/latest/USD", timeout=6) as r:
+            data = json.load(r)
+        if data.get("result") == "success":
+            return data["rates"], data.get("time_last_update_utc", "")
+    except Exception:
+        pass
+    return None, None
+
 @st.cache_data(show_spinner=False)
-def run_simulation(theft, n_meters, strategy, dropout, fault, days, seed):
-    d = simulate_case(theft, n_meters, strategy, dropout, fault, days, seed)
+def run_simulation(theft, n_meters, strategy, dropout, fault, days, seed, billing, bill_noise):
+    d = simulate_case(theft, n_meters, strategy, dropout, fault, days, seed, billing, bill_noise)
     return d, locate(d)
 
 
@@ -52,7 +74,7 @@ def feeder_map(d: dict, res: pd.DataFrame, names: dict | None, show_truth: bool)
     nodes = nodes.merge(res, on="bus", how="left")
     nodes["name"] = [label(b, names) for b in nodes.bus]
     nodes["kind"] = np.where(nodes.bus == "bus_0", "Substation",
-                             np.where(nodes.metered.fillna(False), "Metered transformer",
+                             np.where(nodes.metered.fillna(False).astype(bool), "Metered transformer",
                                       "Unmetered transformer"))
     nodes["share_pct"] = (100 * nodes.share_physics).round(0)
     nodes["stolen"] = nodes.stolen_physics_mwh.round(2)
@@ -84,7 +106,7 @@ def feeder_map(d: dict, res: pd.DataFrame, names: dict | None, show_truth: bool)
         x="x:Q", y="y:Q", text="name:N")
     layers = [lines, pts, sub, text]
     if show_truth:
-        ring = alt.Chart(load[load.true_hotspot.fillna(False)]).mark_point(
+        ring = alt.Chart(load[load.true_hotspot.fillna(False).astype(bool)]).mark_point(
             shape="circle", size=900, filled=False, color="#1e6b52", strokeWidth=2).encode(
             x="x:Q", y="y:Q")
         layers.insert(1, ring)
@@ -147,12 +169,31 @@ def results_view(d, res, names, show_truth, key):
     st.subheader("Inspection plan and money at stake")
     c1, c2 = st.columns([2, 1])
     tariff = c2.number_input("Revenue per kWh sold (US$)", 0.0, 2.0, 0.20, 0.01, key=f"{key}_tariff",
-                             help="Example value. Enter your own average tariff.")
-    days = d["billing"].shape[1]
+                             help="Example value. Enter your own average tariff in US dollars.")
+    cur = c2.selectbox("Show amounts in", list(CURRENCIES), key=f"{key}_cur",
+                       format_func=lambda c: f"{c} - {CURRENCIES[c]}")
+    rate = 1.0
+    if cur != "USD":
+        rates, updated = usd_rates()
+        live = rates.get(cur) if rates else None
+        rate = c2.number_input(
+            f"Exchange rate: 1 US$ = ? {cur}", min_value=0.0,
+            value=float(live) if live else None, format="%.4f", key=f"{key}_rate_{cur}",
+            help=(f"Live rate from open.er-api.com, updated {updated}. You can type your own."
+                  if live else "Live rates could not be loaded. Type the current rate."))
+    days = d["head"].shape[1] / 24
     per_month = 30 / days
     stolen_month = res.stolen_physics_mwh.sum() * per_month
+    usd_month = stolen_month * 1000 * tariff
     c2.metric("Estimated stolen per month", f"{stolen_month:,.0f} MWh")
-    c2.metric("Estimated revenue lost per month", f"US$ {stolen_month * 1000 * tariff:,.0f}")
+    if cur == "USD":
+        c2.metric("Estimated revenue lost per month", f"US$ {usd_month:,.0f}")
+    elif rate:
+        c2.metric("Estimated revenue lost per month", f"{cur} {usd_month * rate:,.0f}",
+                  f"US$ {usd_month:,.0f}", delta_color="off")
+    else:
+        c2.metric("Estimated revenue lost per month", f"US$ {usd_month:,.0f}")
+        c2.caption(f"Enter an exchange rate to see the amount in {cur}.")
     k_half = int(np.searchsorted(res.stolen_physics_mwh.cumsum() / res.stolen_physics_mwh.sum(), 0.5) + 1)
     c2.caption(f"Inspecting the top **{k_half}** of {len(res)} transformer areas targets about half "
                "of the estimated stolen energy.")
@@ -190,11 +231,17 @@ def results_view(d, res, names, show_truth, key):
 
     with st.expander("Substation meter versus billing, hour by hour"):
         T = d["head"].shape[1]
-        n_d = d["billing"].shape[1]
-        shape = d["head"][0, :, 0].reshape(n_d, 24)
-        billed_h = (shape / shape.sum(axis=1, keepdims=True) * d["billing"][0].sum(axis=1)[:, None]).ravel()
-        ts = pd.DataFrame({"hour": np.arange(T), "Substation meter": d["head"][0, :, 0],
-                           "Billed (spread over the day)": billed_h})
+        n_b = d["billing"].shape[1]
+        head_p = d["head"][0, :, 0]
+        if n_b == T // 24 and n_b > 1:
+            shape = head_p.reshape(n_b, 24)
+            billed_h = (shape / shape.sum(axis=1, keepdims=True)
+                        * d["billing"][0].sum(axis=1)[:, None]).ravel()
+            bl = "Billed (spread over each day)"
+        else:
+            billed_h = head_p / head_p.sum() * d["billing"][0].sum()
+            bl = "Billed (period total spread over the hours)"
+        ts = pd.DataFrame({"hour": np.arange(T), "Substation meter": head_p, bl: billed_h})
         if show_truth:
             ts["True legitimate use"] = (d["true_bus_p"][0] - d["theft_bus_p"][0]
                                          - d["fault_bus_p"][0]).sum(axis=1)
@@ -229,6 +276,14 @@ with tab_sim:
                                 format_func={"ends": "Far ends of branches",
                                              "largest": "Largest transformers",
                                              "random": "Random"}.get)
+        billing = c2.selectbox("Billing data available",
+                               ["daily", "period"],
+                               format_func={"daily": "Daily per transformer area",
+                                            "period": "One total for the period (monthly bills / prepaid sales)"}.get)
+        bill_noise = c1.slider("Billing error", 0.0, 0.3, 0.03, 0.01, format="%.2f",
+                               help="How far each billed value is from what was really used. "
+                                    "Prepaid token sales can be 10-20% off, because people buy "
+                                    "tokens when they have money, not when they use power.")
         dropout = c3.slider("Meter readings missing", 0.0, 0.8, 0.2, 0.1, format="%.1f")
         fault = c3.checkbox("Include a cable fault", value=False)
         seed = c3.number_input("Random seed (changes the neighbourhoods and theft spots)",
@@ -237,7 +292,8 @@ with tab_sim:
     if go or "sim_done" in st.session_state:
         st.session_state["sim_done"] = True
         with st.spinner("Simulating the feeder and locating losses..."):
-            d, res = run_simulation(theft, n_meters, strategy, dropout, fault, days, int(seed))
+            d, res = run_simulation(theft, n_meters, strategy, dropout, fault, days, int(seed),
+                                    billing, bill_noise)
         results_view(d, res, None, show_truth=True, key="sim")
         with st.expander("Download this simulated feeder as utility CSV files"):
             st.write("These are the same five files a utility would upload in the next tab. "
@@ -261,7 +317,7 @@ with tab_own:
 | `transformers.csv` | bus, kva | Installed transformer capacity at each load bus (from the asset register). |
 | `head.csv` | hour, p_mw, q_mvar, v_pu | Substation 11 kV breaker readings, every hour, whole days. `hour` can be 0,1,2… or a timestamp. |
 | `meters.csv` | hour, bus, p_mw, q_mvar, v_pu | Any transformer check meters. Gaps are fine; can be empty (header only). |
-| `billing.csv` | day, bus, mwh | Energy sold per transformer area per day (prepaid vending or billing). |
+| `billing.csv` | day, bus, mwh — or just bus, mwh | Energy sold per transformer area: either per day, or one total per bus for the whole period (monthly bills or prepaid token sales). Monthly totals work almost as well as daily figures. |
 """)
     ex = {k: (EXAMPLE_DIR / f"{k}.csv") for k in FILES}
     if all(p.exists() for p in ex.values()):
@@ -291,8 +347,10 @@ with tab_own:
         try:
             with st.spinner("Checking the files and locating losses..."):
                 d, res, names = run_uploaded(uploads, pf, tl)
+            nb = d["billing"].shape[1]
             st.success(f"Read a feeder with {len(res)} load buses, {int(res.metered.sum())} "
-                       f"transformer meters and {d['billing'].shape[1]} days of data.")
+                       f"transformer meters and {d['head'].shape[1] // 24} days of data "
+                       f"({'daily billing' if nb > 1 else 'one billing total per bus'}).")
             results_view(d, res, names, show_truth=False, key="own")
         except FeederDataError as e:
             st.error(f"There is a problem with the files: {e}")

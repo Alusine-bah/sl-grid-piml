@@ -211,6 +211,10 @@ checked against full AC power flow.</p>
   <div class="finding"><h3>Robust to messy field data</h3>
     <p>Losing 80% of transformer-meter readings, or 25% errors in cable data, barely changes the result
     (AUC 0.937 → 0.934).</p></div>
+  <div class="finding"><h3>Monthly bills and prepaid sales are enough</h3>
+    <p>One billing total per transformer area for the period locates theft as well as daily figures
+    (AUC 0.915 vs 0.916). Errors of 10–20% in prepaid sales mainly blur the estimated amount, not the
+    location; analysing a month at a time reduces them.</p></div>
   <div class="finding warn"><h3>Keep the transformer register accurate</h3>
     <p>A badly out-of-date register (ratings often off by 50%) costs about 0.06 AUC for every method.
     Fixing the register matters more than buying extra meters: going from 0 to 6 well-placed
@@ -226,7 +230,7 @@ changing the method. For one 11 kV feeder, it needs:</p>
 <ul class="plain">
   <li>Hourly P, Q and voltage at the substation 11 kV breaker</li>
   <li>Hourly readings from any transformer check meters (gaps are fine)</li>
-  <li>Energy sold per transformer area, per day or month (prepaid vending or billing)</li>
+  <li>Energy sold per transformer area: daily, or one total for the month (prepaid vending or billing)</li>
   <li>The feeder layout, line types and lengths, and transformer kVA ratings</li>
 </ul>
 <p>The <a href="https://sl-grid-piml.streamlit.app">interactive app</a> accepts exactly these as five CSV

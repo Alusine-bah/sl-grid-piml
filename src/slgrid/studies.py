@@ -102,3 +102,24 @@ def perturb_assets(d: dict, cable_error: float = 0.0, kva_error: float = 0.0,
         out["transformer_kva"] = d["transformer_kva"] * rng.lognormal(
             0.0, kva_error, size=d["transformer_kva"].shape)
     return out
+
+
+def rebill(d: dict, resolution: str = "period", noise: float = 0.03, seed: int = 0) -> dict:
+    """Replace the billing data, keeping everything else.
+
+    resolution  "daily": one value per day per bus; "period": one total per bus for the
+                whole period (monthly bills or prepaid token sales)
+    noise       relative error of each billed value. Prepaid token sales in a period can
+                differ from that period's consumption because people buy tokens when they
+                have money, not when they use power; 10-20% is plausible.
+    """
+    rng = np.random.default_rng(seed)
+    out = dict(d)
+    legit = d["true_bus_p"] - d["theft_bus_p"] - d["fault_bus_p"]      # [S, T, B]
+    S, T, B = legit.shape
+    if resolution == "daily":
+        e = legit.reshape(S, T // 24, 24, B).sum(axis=2)
+    else:
+        e = legit.sum(axis=1, keepdims=True)
+    out["billing"] = np.maximum(e * rng.normal(1.0, noise, size=e.shape), 0.0)
+    return out

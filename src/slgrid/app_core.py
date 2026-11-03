@@ -10,18 +10,26 @@ import pandas as pd
 from slgrid.baselines import combined_rules, energy_audit, metered_mask
 from slgrid.dataset import DatasetConfig, generate
 from slgrid.physics_model import PhysicsConfig, PhysicsInformedLocator
-from slgrid.studies import placement, remeter
+from slgrid.studies import placement, rebill, remeter
 
 
 def simulate_case(theft_level: float, n_meters: int, strategy: str, dropout: float,
-                  fault: bool, n_days: int, seed: int) -> dict:
-    """Simulate one feeder period and return it in the standard format (with truth)."""
+                  fault: bool, n_days: int, seed: int, billing: str = "daily",
+                  billing_noise: float = 0.03) -> dict:
+    """Simulate one feeder period and return it in the standard format (with truth).
+
+    billing: "daily" (one value per day per bus) or "period" (one total per bus, as with
+    monthly bills or prepaid token sales). billing_noise: relative error of each value.
+    """
     cfg = DatasetConfig(n_scenarios=1, n_days=n_days, ntl_levels=(theft_level,),
                         fault_probability=1.0 if fault else 0.0, dropout=dropout, seed=seed)
     with tempfile.TemporaryDirectory() as tmp:
         d = dict(np.load(generate(cfg, tmp, name="case", progress=False)))
     buses = placement(d, n_meters, strategy, seed=seed)
-    return remeter(d, buses, dropout=dropout, seed=seed + 1)
+    d = remeter(d, buses, dropout=dropout, seed=seed + 1)
+    if billing != "daily" or abs(billing_noise - 0.03) > 1e-9:
+        d = rebill(d, billing, billing_noise, seed=seed + 2)
+    return d
 
 
 def locate(d: dict, power_factor: float = 0.90, tech_loss: float = 0.03) -> pd.DataFrame:
@@ -65,7 +73,7 @@ def feeder_summary(d: dict, res: pd.DataFrame) -> dict:
     head_e = d["head"][0, :, 0].sum()
     billed = d["billing"][0].sum()
     s = {
-        "days": d["billing"].shape[1],
+        "days": d["head"].shape[1] // 24,
         "head_mwh": head_e,
         "billed_mwh": billed,
         "unbilled_pct": 100 * (1 - billed / head_e),

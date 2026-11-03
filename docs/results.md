@@ -128,3 +128,27 @@ P1 keeps its lead over the rule-based method under every stress.
 - **Sensitive to the asset register:** a badly out-of-date transformer register (log sd 0.4,
   ratings often off by 50%) costs about 0.06 AUC, for P1 and the rule-based method alike.
   **Keeping the transformer register accurate matters more than adding meters.**
+
+## Phase 7: monthly bills and prepaid token sales (25 test scenarios of freetown_v3)
+
+EDSA has prepaid token sales and monthly bills rather than daily readings. Billing was
+re-created as one total per transformer area for the whole period, with 3-20% error
+(prepaid tokens are bought when people have money, not when they use power).
+Reproduce with `python scripts/run_billing_study.py`.
+
+| Billing data | Error | P1 AUC unmetered | P1 total error | B1c AUC unmetered | B1c total error |
+|---|---|---|---|---|---|
+| Daily | 3% | 0.916 | 3.1% | 0.901 | 3.4% |
+| One total per period | 3% | 0.915 | 4.1% | 0.898 | 4.5% |
+| One total per period | 10% | 0.910 | 7.9% | 0.891 | 8.8% |
+| One total per period | 20% | 0.894 | 14.6% | 0.869 | 16.0% |
+
+(The daily row differs slightly from Phase 5 because billing noise was redrawn.)
+
+- **Daily billing is not needed.** One total per transformer area for the period locates theft
+  as well as daily values.
+- **Billing error mainly hurts the estimate of how much is stolen**, not where. With 20% error
+  per area, localisation is still 0.89 AUC.
+- **Practical advice:** analyse a month or more at a time. Token-timing error shrinks as the
+  period gets longer.
+- The physics-informed model keeps its lead over the rule-based method at every level.

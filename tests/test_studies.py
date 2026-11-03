@@ -37,3 +37,11 @@ def test_perturb_assets_changes_only_model_inputs(d):
     assert not np.allclose(dd["line_r_ohm"], d["line_r_ohm"])
     assert not np.allclose(dd["transformer_kva"], d["transformer_kva"])
     assert np.array_equal(dd["true_bus_p"], d["true_bus_p"])
+
+
+def test_rebill_period_keeps_totals(d):
+    from slgrid.studies import rebill
+    dd = rebill(d, "period", noise=0.0)
+    legit = (d["true_bus_p"] - d["theft_bus_p"] - d["fault_bus_p"]).sum(axis=1)
+    assert dd["billing"].shape == (2, 1, 32)
+    assert np.allclose(dd["billing"][:, 0], legit)

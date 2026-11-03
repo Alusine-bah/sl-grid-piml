@@ -73,3 +73,12 @@ def test_clear_error_messages(breakage, message):
     breakage(fr)
     with pytest.raises(FeederDataError, match=message):
         frames_to_standard(fr)
+
+
+def test_period_billing_without_day_column():
+    fr = example()
+    fr["billing"] = fr["billing"].groupby("bus", as_index=False)["mwh"].sum()
+    d, _ = frames_to_standard(fr)
+    assert d["billing"].shape == (1, 1, 32)
+    res = locate(d)
+    assert len(res) == 32 and res.stolen_physics_mwh.sum() > 0

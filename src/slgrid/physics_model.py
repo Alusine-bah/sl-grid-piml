@@ -112,13 +112,21 @@ class PhysicsInformedLocator:
 
     # --- helpers -------------------------------------------------------------
     def _hourly_billed(self, s):
-        """Spread each day's billed energy over the hours using the head load shape."""
+        """Spread billed energy over the hours using the feeder-head load shape.
+
+        Billing may be daily ([D, B] with D = hours / 24) or one total for the whole
+        period ([1, B]), as with monthly bills or prepaid token sales.
+        """
         bill = self.d["billing"][s]                      # [D, B] MWh
         head = self.d["head"][s, :, 0]                   # [T]
-        n_d = bill.shape[0]
-        shape = head[: n_d * 24].reshape(n_d, 24)
-        shape = shape / shape.sum(axis=1, keepdims=True)
-        return (shape[:, :, None] * bill[:, None, :]).reshape(n_d * 24, -1)   # [T, B] MW
+        T = len(head)
+        if bill.shape[0] == T // 24 and bill.shape[0] > 1:
+            n_d = bill.shape[0]
+            shape = head[: n_d * 24].reshape(n_d, 24)
+            shape = shape / shape.sum(axis=1, keepdims=True)
+            return (shape[:, :, None] * bill[:, None, :]).reshape(n_d * 24, -1)   # [T, B] MW
+        shape = head / head.sum()
+        return shape[:, None] * bill.sum(axis=0)[None, :]
 
     def _ac_corrections(self, P, Q, v_head):
         """Losses and LinDistFlow voltage errors from a full AC power flow."""

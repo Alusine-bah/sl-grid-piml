@@ -13,9 +13,11 @@ A utility provides five CSV files for one 11 kV feeder:
   meters.csv        hour, bus, p_mw, q_mvar, v_pu
                     Readings from transformer check meters. Any number of buses (zero is
                     allowed: an empty file with just the header). Missing hours are fine.
-  billing.csv       day, bus, mwh
-                    Energy sold per transformer area per day (prepaid vending or billing).
-                    `day` may be an integer (0, 1, ...) or a date.
+  billing.csv       [day,] bus, mwh
+                    Energy sold per transformer area. Either daily (a `day` column with one
+                    value per day of the period, as an integer or a date), or one total per
+                    bus for the whole period (no `day` column), as with monthly bills or
+                    prepaid token sales.
 
 The period must be whole days: head.csv covers 24 x (number of days) hours.
 
@@ -32,7 +34,7 @@ REQUIRED = {
     "transformers": ["bus", "kva"],
     "head": ["hour", "p_mw", "q_mvar", "v_pu"],
     "meters": ["hour", "bus", "p_mw", "q_mvar", "v_pu"],
-    "billing": ["day", "bus", "mwh"],
+    "billing": ["bus", "mwh"],          # "day" is optional
 }
 
 
@@ -110,12 +112,21 @@ def frames_to_standard(frames: dict[str, pd.DataFrame]) -> tuple[dict, dict]:
     n_d = n_t // 24
 
     bill = frames["billing"].copy()
-    bill["day"] = _to_index(bill["day"], "day")
     bill["bus"] = bill["bus"].astype(str).str.strip()
-    if bill["day"].max() + 1 != n_d:
-        raise FeederDataError(f"billing.csv covers {bill['day'].max() + 1} days but head.csv covers {n_d}.")
-    billing = (bill.pivot_table(index="day", columns="bus", values="mwh", aggfunc="sum")
-               .reindex(index=range(n_d), columns=load_buses).fillna(0.0))
+    unknown = sorted(set(bill["bus"]) - set(load_buses))
+    if unknown:
+        raise FeederDataError(f"billing.csv lists bus(es) not in lines.csv: {', '.join(unknown[:5])}")
+    daily = "day" in bill.columns and bill["day"].nunique() > 1
+    if daily:
+        bill["day"] = _to_index(bill["day"], "day")
+        if bill["day"].max() + 1 != n_d:
+            raise FeederDataError(f"billing.csv covers {bill['day'].max() + 1} days but head.csv covers "
+                                  f"{n_d}. Give one row per day per bus, or remove the day column and "
+                                  "give one total per bus for the whole period.")
+        billing = (bill.pivot_table(index="day", columns="bus", values="mwh", aggfunc="sum")
+                   .reindex(index=range(n_d), columns=load_buses).fillna(0.0))
+    else:
+        billing = bill.groupby("bus")["mwh"].sum().reindex(load_buses).fillna(0.0).to_frame().T
     if (billing.sum(axis=0) <= 0).any():
         zero = list(billing.columns[billing.sum(axis=0) <= 0][:5])
         raise FeederDataError(f"billing.csv has no billed energy for bus(es): {', '.join(zero)}. "
@@ -184,7 +195,11 @@ def standard_to_frames(d: dict, s: int = 0) -> dict[str, pd.DataFrame]:
                          "v_pu": round(float(d["meter_v"][s, t, k]), 5)})
     meters = pd.DataFrame(rows, columns=REQUIRED["meters"])
     n_d = d["billing"].shape[1]
-    billing = pd.DataFrame([{"day": day, "bus": short(b), "mwh": round(float(d["billing"][s, day, j]), 5)}
-                            for day in range(n_d) for j, b in enumerate(buses)])
+    if n_d == 1:
+        billing = pd.DataFrame([{"bus": short(b), "mwh": round(float(d["billing"][s, 0, j]), 5)}
+                                for j, b in enumerate(buses)])
+    else:
+        billing = pd.DataFrame([{"day": day, "bus": short(b), "mwh": round(float(d["billing"][s, day, j]), 5)}
+                                for day in range(n_d) for j, b in enumerate(buses)])
     return {"lines": lines, "transformers": transformers, "head": head, "meters": meters,
             "billing": billing}
