@@ -5,7 +5,7 @@ on distribution feeders with very few meters, using a Sierra Leone 11 kV feeder 
 
 **Project page:** https://alusine-bah.github.io/sl-grid-piml/
 
-**Status:** Phase 6 — physics-informed model, baselines, meter placement and robustness studies complete.
+**Status:** simulation study complete. Next step: a test on a real feeder.
 
 ## Why
 Sierra Leone's distribution utility (EDSA) loses roughly half of the electricity it buys to
@@ -16,9 +16,11 @@ find *where* power is being lost, and how much?
 ## Approach
 1. Model an 11 kV radial feeder: the IEEE 33-bus layout rebuilt with real Freetown cable
    constants, a 33/11 kV substation transformer, and household demand from a 2023 Freetown survey.
-2. Simulate realistic loads, theft, faults, missing and noisy meter data.
-3. Compare classical state estimation, pure ML, and a physics-informed model.
-4. Study how many meters are needed and where to place them.
+2. Simulate realistic loads, theft hotspots, cable faults, and missing and noisy meter data.
+3. Compare the standard energy audit, rule-based methods using transformer ratings, pure
+   machine learning, and a physics-informed estimator that uses the feeder's power-flow equations.
+4. Study how many transformer meters are needed, where to place them, and how robust each
+   method is to missing readings and wrong asset data.
 
 All data is simulated for now. The code uses one standard feeder format, so real utility
 data can replace the simulator later without changing the models.
