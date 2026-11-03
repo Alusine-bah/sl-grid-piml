@@ -25,7 +25,7 @@ ap.add_argument("--scenarios", type=int, default=100)
 ap.add_argument("--days", type=int, default=7)
 ap.add_argument("--dropout", type=float, default=0.2, help="share of meter readings missing")
 ap.add_argument("--seed", type=int, default=0)
-ap.add_argument("--name", default="freetown_v1")
+ap.add_argument("--name", default="freetown_v2")
 args = ap.parse_args()
 
 cfg = DatasetConfig(n_scenarios=args.scenarios, n_days=args.days,

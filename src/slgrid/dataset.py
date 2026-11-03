@@ -13,6 +13,7 @@ Truth (for training targets and scoring only):
   line_loss       [S, T, L]  technical loss of every line, MW
   is_theft        [S, B]     bus label
   is_fault        [S, B]     bus label
+  households      [S, B]     true number of households behind each bus (varies by scenario)
 
 What the utility sees:
   head            [S, T, 3]  feeder-head P (MW), Q (MVAr), V (pu)
@@ -31,7 +32,7 @@ import pandas as pd
 
 from slgrid.anomalies import ScenarioConfig, inject
 from slgrid.freetown import build_freetown_feeder
-from slgrid.loads import assign_customers, generate_profiles
+from slgrid.loads import assign_customers, generate_profiles, perturb_customers
 from slgrid.metering import MeterConfig, observe
 from slgrid.simulate import run_timeseries
 
@@ -44,6 +45,7 @@ class DatasetConfig:
     fault_probability: float = 0.3
     meter_buses: tuple[int, ...] = (6, 12, 17, 24, 29, 32)
     dropout: float = 0.2
+    customer_spread: float = 0.3   # random variation of customers per bus between scenarios
     seed: int = 0
 
 
@@ -54,7 +56,8 @@ def generate(cfg: DatasetConfig, out_dir: str | Path, name: str = "dataset",
     rng = np.random.default_rng(cfg.seed)
 
     net = build_freetown_feeder()
-    cust = assign_customers(net)
+    base_cust = assign_customers(net)
+    cust = base_cust
     bus_cols = [f"bus_{b}" for b in sorted(cust["feeder_bus"].unique())]
     meter_cols = [f"bus_{b}" for b in cfg.meter_buses]
     mcfg = MeterConfig(meter_buses=cfg.meter_buses, dropout=cfg.dropout)
@@ -65,7 +68,7 @@ def generate(cfg: DatasetConfig, out_dir: str | Path, name: str = "dataset",
         return g.T.groupby(level=0).sum().T[bus_cols].values
 
     keys = ["true_bus_p", "theft_bus_p", "fault_bus_p", "vm_pu", "line_loss",
-            "is_theft", "is_fault", "head", "meter_p", "meter_q", "meter_v", "billing"]
+            "is_theft", "is_fault", "households", "head", "meter_p", "meter_q", "meter_v", "billing"]
     store = {k: [] for k in keys}
     rows = []
 
@@ -77,6 +80,7 @@ def generate(cfg: DatasetConfig, out_dir: str | Path, name: str = "dataset",
         ntl = float(rng.choice(cfg.ntl_levels))
         n_fault = int(rng.random() < cfg.fault_probability)
         scfg = ScenarioConfig(target_ntl=ntl, n_fault_buses=n_fault)
+        cust = perturb_customers(base_cust, rng, cfg.customer_spread) if cfg.customer_spread else base_cust
         demand = generate_profiles(cust, n_days=cfg.n_days, seed=int(rng.integers(1 << 31)))
         sc = inject(cust, demand["p_mw"], scfg, rng)
         res = run_timeseries(net, sc["p_mw"], sc["q_mvar"])
@@ -93,6 +97,8 @@ def generate(cfg: DatasetConfig, out_dir: str | Path, name: str = "dataset",
         store["line_loss"].append(res["line_loss"].values)
         store["is_theft"].append(lab["is_theft"].values)
         store["is_fault"].append(lab["is_fault"].values)
+        hh = cust.assign(bus=[f"bus_{b}" for b in cust["feeder_bus"]]).groupby("bus")["households"].sum()
+        store["households"].append(hh.loc[bus_cols].values)
         store["head"].append(obs["head"][["p_mw", "q_mvar", "vm_pu"]].values)
         store["meter_p"].append(obs["meters"]["p_mw"][meter_cols].values)
         store["meter_q"].append(obs["meters"]["q_mvar"][meter_cols].values)

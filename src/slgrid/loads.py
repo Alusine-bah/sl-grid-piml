@@ -70,6 +70,27 @@ def assign_customers(net, total_households: int = 12_000,
     return L[["feeder_bus", "kind", "households", "commercial_peak_mw", "transformers"]]
 
 
+def perturb_customers(customers: pd.DataFrame, rng: np.random.Generator,
+                      sd: float = 0.3) -> pd.DataFrame:
+    """Randomise how many customers sit behind each bus.
+
+    A utility does not know the true number of households (legal or illegal) behind each
+    transformer, and it differs between neighbourhoods. Each scenario therefore scales
+    every bus by a random log-normal factor (sd 0.3, i.e. typically +/-30%), then rescales
+    so the feeder total stays the same. This stops models from memorising a fixed
+    "normal" level for each bus.
+    """
+    c = customers.copy()
+    f = rng.lognormal(0.0, sd, size=len(c))
+    hh = c["households"].values * f
+    c["households"] = np.round(hh * c["households"].sum() / hh.sum()).astype(int)
+    com = c["commercial_peak_mw"].values * f
+    if com.sum() > 0:
+        c["commercial_peak_mw"] = com * c["commercial_peak_mw"].sum() / com.sum()
+    c["transformers"] = np.maximum(1, np.round(c["households"] / HOUSEHOLDS_PER_TRANSFORMER)).astype(int)
+    return c
+
+
 def generate_profiles(customers: pd.DataFrame, n_days: int = 1, seed: int = 0,
                       power_factor: float = POWER_FACTOR) -> dict[str, pd.DataFrame]:
     """Hourly true demand at every load bus.

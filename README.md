@@ -3,7 +3,7 @@
 Physics-informed machine learning for locating electricity losses (theft and faults)
 on distribution feeders with very few meters, using a Sierra Leone 11 kV feeder as the case study.
 
-**Status:** Phase 3 — theft and fault scenarios, realistic utility metering, and a labelled dataset generator.
+**Status:** Phase 4 — baseline methods evaluated. Next: the physics-informed model.
 
 ## Why
 Sierra Leone's distribution utility (EDSA) loses roughly half of the electricity it buys to
@@ -31,6 +31,7 @@ pytest
 python scripts\run_base_powerflow.py
 python scripts\run_freetown_day.py
 python scripts\generate_dataset.py --scenarios 100 --days 7
+python scripts\run_baselines.py
 ```
 
 ## Grounded in Sierra Leone data
@@ -60,6 +61,18 @@ Every parameter is traced to a published source in [`docs/sources.md`](docs/sour
 See [`docs/data_format.md`](docs/data_format.md) for the exact data a utility would need to
 provide to run the models on a real feeder.
 
+## Results so far
+Baselines on 25 test scenarios (full log in [`docs/results.md`](docs/results.md)):
+
+| Method | Finds theft behind unmetered transformers (AUC) | Error in total stolen energy |
+|---|---|---|
+| Energy audit (standard utility method) | 0.63 | 2.8% |
+| Pure ML (needs 75 labelled weeks) | 0.94 | 12.9% |
+
+The audit gets the total right but cannot say where; pure ML can say where but needs
+labelled theft data that utilities do not have, and gets the amounts wrong. The
+physics-informed model aims to do both without labels.
+
 ## Layout
 - `src/slgrid/feeder.py` — base IEEE 33-bus feeder and the standard feeder format
 - `src/slgrid/freetown.py` — the Freetown-style feeder
@@ -68,6 +81,9 @@ provide to run the models on a real feeder.
 - `src/slgrid/anomalies.py` — theft and fault injection with labels
 - `src/slgrid/metering.py` — what the utility observes (meters, billing, noise, gaps)
 - `src/slgrid/dataset.py` — labelled dataset generator
+- `src/slgrid/topology.py` — network position features from the line list
+- `src/slgrid/evaluation.py` — common metrics for all methods
+- `src/slgrid/baselines.py` — energy audit and pure ML baselines
 - `data/sources/` — data extracted from published sources
 - `docs/sources.md` — citations and how each number is used
 - `scripts/` — runnable experiments
