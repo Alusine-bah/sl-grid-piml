@@ -3,7 +3,7 @@
 Physics-informed machine learning for locating electricity losses (theft and faults)
 on distribution feeders with very few meters, using a Sierra Leone 11 kV feeder as the case study.
 
-**Status:** Phase 2 — Freetown-style feeder with real cable data and survey-based household loads.
+**Status:** Phase 3 — theft and fault scenarios, realistic utility metering, and a labelled dataset generator.
 
 ## Why
 Sierra Leone's distribution utility (EDSA) loses roughly half of the electricity it buys to
@@ -30,6 +30,7 @@ pip install -e .
 pytest
 python scripts\run_base_powerflow.py
 python scripts\run_freetown_day.py
+python scripts\generate_dataset.py --scenarios 100 --days 7
 ```
 
 ## Grounded in Sierra Leone data
@@ -48,11 +49,25 @@ Every parameter is traced to a published source in [`docs/sources.md`](docs/sour
 | Lowest voltage at peak | ~0.90 pu | measured Freetown weak buses 0.87–0.90 pu |
 | MV technical losses | ~3% of energy | MV network losses 4.8% |
 
+## Scenarios: what is simulated and what the utility sees
+- **Theft:** at a set of hotspot buses, 15%, 25% or 35% of all delivered energy is stolen
+  (Sierra Leone commercial losses: 18–40%). The feeder load stays realistic; theft only
+  changes how much is billed.
+- **Cable faults:** in 30% of scenarios, a constant leakage of 40–150 kW starts at a random hour.
+- **The utility's view:** a feeder-head meter, six transformer meters with 2% noise and 20%
+  missing readings, and daily billing per transformer area. No customer smart meters.
+
+See [`docs/data_format.md`](docs/data_format.md) for the exact data a utility would need to
+provide to run the models on a real feeder.
+
 ## Layout
 - `src/slgrid/feeder.py` — base IEEE 33-bus feeder and the standard feeder format
 - `src/slgrid/freetown.py` — the Freetown-style feeder
 - `src/slgrid/loads.py` — household and commercial demand profiles
 - `src/slgrid/simulate.py` — time-series power flow
+- `src/slgrid/anomalies.py` — theft and fault injection with labels
+- `src/slgrid/metering.py` — what the utility observes (meters, billing, noise, gaps)
+- `src/slgrid/dataset.py` — labelled dataset generator
 - `data/sources/` — data extracted from published sources
 - `docs/sources.md` — citations and how each number is used
 - `scripts/` — runnable experiments
