@@ -3,9 +3,11 @@
 Physics-informed estimation for locating electricity losses (theft and faults)
 on distribution feeders with very few meters, using a Sierra Leone 11 kV feeder as the case study.
 
+**Interactive app:** https://sl-grid-piml.streamlit.app
+
 **Project page:** https://alusine-bah.github.io/sl-grid-piml/
 
-**Status:** simulation study complete. Next step: a test on a real feeder.
+**Status:** simulation study and interactive app complete. Next step: a test on a real feeder.
 
 ## Why
 Sierra Leone's distribution utility (EDSA) loses roughly half of the electricity it buys to
@@ -24,6 +26,21 @@ find *where* power is being lost, and how much?
 
 All data is simulated for now. The code uses one standard feeder format, so real utility
 data can replace the simulator later without changing the models.
+
+## The interactive app
+`app.py` is a web app (Streamlit) that runs the real model:
+
+- **Simulate a feeder:** choose the theft level, number and placement of transformer meters,
+  missing readings, a cable fault and the number of days. The app simulates the feeder hour by
+  hour, then locates the losses without being told where they are, and shows how close it got.
+- **Analyse your own data:** upload five CSV files describing one real feeder (line sections,
+  transformer kVA, substation meter, transformer meters, billing). Example files are in
+  `data/example_feeder/` and can be downloaded from the app.
+- Both modes give a **feeder map** coloured by suspected theft, a ranked **inspection list**
+  (downloadable), an **inspection plan** (how much stolen energy the top N areas cover), the
+  **revenue at stake**, and a comparison of methods.
+
+Run it locally with `streamlit run app.py`.
 
 ## Setup (Windows PowerShell)
 ```
@@ -109,6 +126,10 @@ per feeder-week on a laptop.
 - `src/slgrid/baselines.py` — energy audit, ratings rules, and pure ML baselines
 - `src/slgrid/physics_model.py` — the physics-informed locator
 - `src/slgrid/studies.py` — meter placement and robustness helpers
+- `src/slgrid/io.py` — reads and checks a utility's own feeder files
+- `src/slgrid/app_core.py` — back end of the app (simulate, locate, feeder layout)
+- `app.py` — the interactive app
+- `data/example_feeder/` — example feeder in the upload format
 - `data/sources/` — data extracted from published sources
 - `docs/sources.md` — citations and how each number is used
 - `scripts/` — runnable experiments

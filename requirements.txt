@@ -5,3 +5,4 @@ matplotlib
 pytest
 numba
 scikit-learn
+streamlit>=1.50
