@@ -1,0 +1,13 @@
+appliance,saturation,units_per_household,mdd_per_customer_kw,utilisation_factor
+light,1.00,7.84,0.026,0.14
+television,0.86,1.46,0.016,0.055
+fan,0.72,1.30,0.003,0.035
+iron,0.78,0.93,0.021,0.02
+computer,0.50,1.18,0.003,0.03
+freezer,0.62,0.91,0.054,0.17
+refrigerator,0.37,0.52,0.044,0.24
+washing_machine,0.23,0.28,0.011,0.03
+air_conditioner,0.31,0.74,0.099,0.13
+microwave,0.34,0.38,0.007,0.02
+water_heater,0.56,0.67,0.014,0.02
+rice_cooker,0.32,0.34,0.003,0.01

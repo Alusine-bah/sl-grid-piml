@@ -1,0 +1,10 @@
+conductor,laying,voltage_kv,material,size_mm2,r_ohm_per_km,x_ohm_per_km,c_nf_per_km,max_current_a,notes
+Cu185_PILC,underground,11,Cu,185,0.118,0.080,580,355,old paper-insulated cable; many sections faulty
+Cu185_XLPE,underground,11,Cu,185,0.128,0.0931,430,430,
+Al240_XLPE,underground,11,Al,240,0.161,0.109,460,405,
+Al300_PILC,underground,11,Al,300,0.123,0.103,490,455,
+Cu500_XLPE_2x,underground,11,Cu,500,0.0185,0.0676,1300,1210,double cable Kingtom to Freetown S/S
+AAAC120,overhead,11,Al,120,0.270,0.354,10.3,351,
+ACSR240,overhead,11,Al,240,0.120,0.3226,11.39,593,
+AAAC150,overhead,33,Al,150,0.198,0.3437,10.66,407,33 kV line used for comparison
+ACSR120,overhead,33,Al,120,0.250,0.3381,10.84,388,33 kV line used for comparison
