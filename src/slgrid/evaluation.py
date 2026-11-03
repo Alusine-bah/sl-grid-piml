@@ -55,6 +55,10 @@ def evaluate(method: str, scores: np.ndarray, stolen_hat: np.ndarray, d, test_id
     rows = []
     for group, mask in [("all buses", np.ones_like(metered_mask, dtype=bool)),
                         ("metered", metered_mask), ("unmetered", ~metered_mask)]:
+        if not mask.any():
+            rows.append({"method": method, "buses": group, "AUC": np.nan, "AP": np.nan,
+                         "F1": np.nan, "MAE_MWh": np.nan})
+            continue
         m = _metrics(scores[:, mask].ravel(), labels[:, mask].ravel(),
                      stolen_hat[:, mask].ravel(), stolen_true[:, mask].ravel(), threshold)
         m.update(method=method, buses=group)

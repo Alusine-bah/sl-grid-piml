@@ -3,7 +3,7 @@
 Physics-informed machine learning for locating electricity losses (theft and faults)
 on distribution feeders with very few meters, using a Sierra Leone 11 kV feeder as the case study.
 
-**Status:** Phase 5 — physics-informed model working and evaluated. Next: meter placement study and edge deployment.
+**Status:** Phase 6 — physics-informed model, baselines, meter placement and robustness studies complete.
 
 ## Why
 Sierra Leone's distribution utility (EDSA) loses roughly half of the electricity it buys to
@@ -32,6 +32,7 @@ python scripts\run_base_powerflow.py
 python scripts\run_freetown_day.py
 python scripts\generate_dataset.py --scenarios 100 --days 7
 python scripts\run_experiments.py
+python scripts\run_studies.py
 ```
 
 ## Grounded in Sierra Leone data
@@ -62,25 +63,34 @@ See [`docs/data_format.md`](docs/data_format.md) for the exact data a utility wo
 provide to run the models on a real feeder.
 
 ## Results
-On 25 test scenarios (full log in [`docs/results.md`](docs/results.md)):
+On 25 test scenarios (full log, including a corrected earlier claim, in [`docs/results.md`](docs/results.md)):
 
-| Method | Theft labels needed | Finds theft at unmetered transformers (AUC) | Error in total stolen energy |
-|---|---|---|---|
-| Energy audit (standard utility method) | none | 0.65 | 3.4% |
-| Audit + transformer ratings | none | 0.90 | 47.7% |
-| Pure ML | 3 labelled weeks | 0.92 | 23.6% |
-| Pure ML | 75 labelled weeks | 0.97 | 12.2% |
-| **Physics-informed (this project)** | **none** | **0.92** | **2.7%** |
+| Method | Theft labels needed | Finds theft at unmetered transformers (AUC) | Error per transformer (MWh/week) | Error in total stolen energy |
+|---|---|---|---|---|
+| Energy audit (standard utility method) | none | 0.65 | 4.30 | 3.4% |
+| Combined rules: ratings + meters + feeder gap | none | 0.90 | 2.44 | 3.4% |
+| Pure ML | 3 labelled weeks | 0.92 | 3.39 | 23.6% |
+| Pure ML | 75 labelled weeks | 0.97 | 1.79 | 12.2% |
+| **Physics-informed (this project)** | **none** | **0.92** | **2.11** | **2.7%** |
 
-With no theft labels, the physics-informed model finds theft as well as machine learning
-trained on three weeks of labelled theft data, and estimates the stolen amount 4-17 times
-more accurately than any other method that can say where the theft is.
+### Main findings
+1. **The biggest, cheapest win needs no new hardware:** combining the transformer asset
+   register with the feeder-head meter raises theft localisation at unmetered transformers
+   from 0.65 to 0.90 AUC compared with today's energy audit.
+2. **The physics-informed model adds a consistent further gain** with no theft labels:
+   the best label-free localisation (0.92), 14% lower error per transformer, and the most
+   accurate total of any method that can locate theft. It matches ML trained on three
+   weeks of labelled theft data, which utilities like EDSA do not have.
+3. **Robust where it matters for Sierra Leone:** losing 80% of meter readings or 25% errors
+   in cable data barely affect it. An out-of-date transformer register hurts every method,
+   so **keeping the asset register accurate matters more than buying extra meters.**
+4. **Limitation:** small cable faults are hard to separate from heavy theft (AUC 0.68).
 
 **How it works:** for each feeder, it finds the theft pattern that best explains the
 substation meter, a few transformer meters and the billing records, while obeying the
 feeder's power balance and the voltage drop through its real cables (checked against full
-AC power flow). Transformer kVA ratings from the asset register give it a starting guess.
-It runs in about 5 seconds per feeder-week on a laptop.
+AC power flow). Transformer kVA ratings give it a starting guess. It runs in 5-20 seconds
+per feeder-week on a laptop.
 
 ## Layout
 - `src/slgrid/feeder.py` — base IEEE 33-bus feeder and the standard feeder format
@@ -92,8 +102,9 @@ It runs in about 5 seconds per feeder-week on a laptop.
 - `src/slgrid/dataset.py` — labelled dataset generator
 - `src/slgrid/topology.py` — network position features from the line list
 - `src/slgrid/evaluation.py` — common metrics for all methods
-- `src/slgrid/baselines.py` — energy audit, audit + ratings, and pure ML baselines
+- `src/slgrid/baselines.py` — energy audit, ratings rules, and pure ML baselines
 - `src/slgrid/physics_model.py` — the physics-informed locator
+- `src/slgrid/studies.py` — meter placement and robustness helpers
 - `data/sources/` — data extracted from published sources
 - `docs/sources.md` — citations and how each number is used
 - `scripts/` — runnable experiments

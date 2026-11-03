@@ -228,7 +228,12 @@ class PhysicsInformedLocator:
         return {"theta": theta, "fault_mw": c, "score": score, "stolen": stolen,
                 "q0": sol.x[i_q0], "v_off": sol.x[i_v]}
 
-    def predict(self, s_idx):
-        out = [self.fit_scenario(s) for s in s_idx]
+    def predict(self, s_idx, n_jobs: int = 1):
+        """Fit every scenario in s_idx. n_jobs > 1 runs scenarios in parallel processes."""
+        if n_jobs == 1:
+            out = [self.fit_scenario(s) for s in s_idx]
+        else:
+            from joblib import Parallel, delayed
+            out = Parallel(n_jobs=n_jobs)(delayed(self.fit_scenario)(s) for s in s_idx)
         return (np.array([o["score"] for o in out]), np.array([o["stolen"] for o in out]),
                 np.array([o["fault_mw"] for o in out]))

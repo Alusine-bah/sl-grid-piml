@@ -46,3 +46,11 @@ def test_pure_ml_and_evaluation(d):
     res = evaluate("ml", s, st, d, test, 0.5, metered_mask(d))
     assert set(res["buses"]) == {"all buses", "metered", "unmetered"}
     assert res["AUC"].between(0, 1).all()
+
+
+def test_combined_rules_keeps_total(d):
+    from slgrid.baselines import combined_rules
+    idx = np.arange(len(d["is_theft"]))
+    score, stolen = combined_rules(d, idx)
+    assert (stolen >= 0).all() and (score >= 0).all()
+    assert np.allclose(stolen.sum(axis=1), d["theft_bus_p"].sum(axis=(1, 2)), rtol=0.25)

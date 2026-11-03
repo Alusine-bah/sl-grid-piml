@@ -5,6 +5,7 @@
 Methods:
   B1   energy audit                       no labels
   B1b  energy audit + transformer ratings no labels
+  B1c  ratings + meters + feeder gap rules no labels (strongest rule-based method)
   B2   pure ML (+ ratings), 3 and all     needs labelled theft history
        labelled training scenarios
   P1   physics-informed locator (ours)    no labels
@@ -22,7 +23,7 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import roc_auc_score
 
-from slgrid.baselines import PureML, capacity_audit, energy_audit, metered_mask
+from slgrid.baselines import PureML, capacity_audit, combined_rules, energy_audit, metered_mask
 from slgrid.evaluation import best_threshold, evaluate, split_scenarios
 from slgrid.physics_model import PhysicsInformedLocator
 
@@ -56,6 +57,7 @@ def add(name, labels, fn, thr_idx):
 calib = train[:5]
 add("B1 energy audit", "none", lambda i: energy_audit(d, i), calib)
 add("B1b audit + ratings", "none", lambda i: capacity_audit(d, i), calib)
+add("B1c combined rules", "none", lambda i: combined_rules(d, i), calib)
 for n in (3, len(train)):
     ml = PureML().fit(d, train[:n])
     add(f"B2 pure ML ({n} weeks)", f"{n} weeks", lambda i, m=ml: m.predict(d, i), train[:n])
@@ -88,6 +90,8 @@ for name in allb.index:
     lbl = allb.loc[name, "theft labels"]
     marker = "o" if lbl == "none" else "s"
     color = "tab:red" if name.startswith("P1") else ("tab:gray" if lbl == "none" else "tab:blue")
+    if name.startswith("B1b"):
+        continue   # off the chart (total error ~50%); listed in the table
     ax.scatter(allb.loc[name, "feeder err %"], unm.loc[name, "AUC"], s=120, marker=marker,
                color=color, zorder=3)
     ax.annotate(f"{name}\n(labels: {lbl})", (allb.loc[name, "feeder err %"], unm.loc[name, "AUC"]),
@@ -96,7 +100,7 @@ ax.set_xlabel("Error in total stolen energy (%)  ← better")
 ax.set_ylabel("Finding theft at unmetered transformers (AUC)  → better")
 ax.set_title("Physics-informed vs baselines (test scenarios)")
 ax.grid(alpha=0.3)
-ax.set_xlim(0, allb['feeder err %'].max() * 1.35)
+ax.set_xlim(0, allb.drop(index=[i for i in allb.index if i.startswith("B1b")])["feeder err %"].max() * 1.35)
 fig.tight_layout()
 Path("outputs").mkdir(exist_ok=True)
 fig.savefig("outputs/experiments.png", dpi=150)

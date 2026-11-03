@@ -13,6 +13,12 @@ B1b. Energy audit + transformer ratings (rule-based, no training)
     times the feeder-head energy. Buses billing far less than expected are suspicious.
     Gives good locations but no physics, so its total is not tied to the energy balance.
 
+B1c. Combined rules: ratings + meters + feeder energy gap (no training, no physics)
+    The strongest simple method we could design. Metered buses: stolen = metered energy -
+    billed. The rest of the feeder gap (head energy x 97% - billed) is spread over the
+    unmetered buses in proportion to their B1b excess (expected from kVA - billed).
+    Locates like B1b and keeps the total tied to the energy balance like B1.
+
 B2. Pure machine learning (supervised, no physics)
     A gradient-boosted tree model trained on labelled scenarios. Per bus it sees billing
     statistics, the bus's position in the network (depth, path impedance, downstream size)
@@ -67,6 +73,23 @@ def capacity_audit(d, s_idx, tech_loss_share: float = 0.03, max_share: float = 0
     theta = np.clip(expected / billed - 1, 0, max_share / (1 - max_share))
     stolen = billed * theta
     return theta / (1 + theta), stolen
+
+
+def combined_rules(d, s_idx, tech_loss_share: float = 0.03):
+    """B1c. Returns (score, stolen_MWh), each [S, B]."""
+    _, excess = capacity_audit(d, s_idx, tech_loss_share)
+    billed = d["billing"][s_idx].sum(axis=1)
+    head = d["head"][s_idx, :, 0].sum(axis=1)
+    gap = np.maximum(head * (1 - tech_loss_share) - billed.sum(axis=1), 0)
+    mm = metered_mask(d)
+    stolen = np.zeros_like(billed)
+    if mm.any():
+        m_cols = [int(np.flatnonzero(d["bus_names"] == m)[0]) for m in d["meter_names"]]
+        stolen[:, m_cols] = np.maximum(_metered_energy(d, s_idx) - billed[:, m_cols], 0)
+    rest = np.maximum(gap - stolen.sum(axis=1), 0)
+    w = excess[:, ~mm] / np.maximum(excess[:, ~mm].sum(axis=1, keepdims=True), 1e-12)
+    stolen[:, ~mm] = rest[:, None] * w
+    return stolen / (stolen + billed + 1e-9), stolen
 
 
 def ml_features(d, s_idx) -> pd.DataFrame:
