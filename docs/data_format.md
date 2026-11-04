@@ -18,6 +18,11 @@ as EDSA would need to provide for one 11 kV feeder, and how it maps to the array
 Nothing in this list needs customer smart meters. Missing readings are allowed and are
 stored as NaN.
 
+Load shedding: hours when the feeder was switched off can be left out of the substation
+file or given as zero. The models treat them as dead hours (no flow, no readings) and use
+only energised hours. Hour numbers and timestamps are counted from the start (midnight) of
+the first day.
+
 ## Arrays (shapes)
 
 S = scenarios, T = hours, B = load buses (32), N = all buses (34), M = metered buses,

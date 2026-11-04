@@ -200,3 +200,52 @@ was chosen on development data, where clean weeks never scored above 3.4. Reprod
 
 The main experiments (Phases 5-7) use the model without the detector, so their numbers are
 unchanged. The app uses the detector.
+
+## Phase 9: load shedding
+
+Sierra Leone feeders are often switched off on a schedule. The simulator now supports
+three supply patterns plus "none" (`shedding` in `DatasetConfig`, and in the app):
+
+- **4h:** one random 4-hour outage per day.
+- **8h:** one random 8-hour outage per day.
+- **rotation:** supply 19:00-07:00 one day in three, as in the 2008 rotation programme
+  (JICA 2009). About 26 supplied hours a week.
+
+When supply returns, demand is higher for a while because fridges, freezers and water
+heaters all restart together (cold load pickup): +30% in the first hour, +15% in the second.
+During an outage the feeder is dead: no flows, no losses, no meter readings, and a cable
+fault draws nothing. The models never see the schedule; they infer the off hours from the
+substation meter.
+
+**Data.** Three datasets of 40 feeder-weeks each (seeds 301, 302, 303), half with a cable
+fault. Reproduce with `python scripts/run_shedding_study.py`.
+
+| Pattern | Hours supplied per week | P1 AUC unmetered | P1 total error | B1c AUC unmetered | B1c total error | Faults detected | False alarms | Fault location AUC |
+|---|---|---|---|---|---|---|---|---|
+| 4h | 140 | 0.928 | 2.1% | 0.913 | 4.0% | 17 / 20 | 0 / 20 | 0.84 |
+| 8h | 114 | 0.910 | **1.6%** | 0.901 | 3.8% | 22 / 24 | 0 / 16 | 0.87 |
+| rotation | 26 | **0.938** | 3.6% | 0.926 | 3.9% | 4 / 18 | 0 / 22 | 0.51 |
+
+### What this shows
+- **Theft location and size survive load shedding.** Even with only 26 supplied hours a
+  week, the physics-informed model locates theft at unmetered transformers with 0.94 AUC
+  and estimates the total stolen within 4%.
+- **Honest note:** before any changes, the model already coped with 4-8 hours a day of
+  shedding (8h: 1.9% total error, 22/24 faults). The work mainly fixed the heavy-rationing case.
+- **Two bugs found and fixed:**
+  1. The combined-rules method (B1c) averaged meter readings over all hours, including
+     dead ones, which broke it under rotation (461% total error, AUC 0.5). It now uses
+     energised hours only.
+  2. The physics model let dead hours (all zeros) dilute the weight of the substation
+     balance equations, so it overestimated theft by 12-17% even in clean weeks under
+     rotation. It now uses energised hours only: total error under rotation fell from 10.5%
+     to 3.6%, and a false fault alarm disappeared.
+- **Cable faults under heavy rationing are mostly missed** (4/18 detected), because a week
+  of rotation gives only a few energised hours before and after a fault starts. No false
+  alarms in any pattern.
+- **Practical advice:** with heavy rationing, analyse a month or more at a time.
+- Results without shedding are unchanged (identical to the earlier phases).
+- **Upload format:** hours when a feeder was off can be left out of `head.csv` or given as
+  zero. Timestamps are counted from midnight of the first day, so outages at the start of
+  the period do not shift the timeline.
+

@@ -59,6 +59,8 @@ data can replace the simulator later without changing the models.
   comparison of methods.
 - Billing can be daily, or one total per transformer area for the period (monthly bills or
   prepaid token sales).
+- A **load-shedding** setting simulates daily outages or the one-day-in-three rotation;
+  uploaded data may simply leave outage hours out.
 - A **cable-fault alert** gives the start hour, leak size and likely section of a new fault,
   marked on the map, so the tool serves the maintenance team as well as the revenue team.
 
@@ -78,6 +80,7 @@ python scripts\run_experiments.py
 python scripts\run_studies.py
 python scripts\run_billing_study.py
 python scripts\run_fault_study.py
+python scripts\run_shedding_study.py
 ```
 
 ## Grounded in Sierra Leone data
@@ -101,6 +104,8 @@ Every parameter is traced to a published source in [`docs/sources.md`](docs/sour
   (Sierra Leone commercial losses: 18–40%). The feeder load stays realistic; theft only
   changes how much is billed.
 - **Cable faults:** in 30% of scenarios, a constant leakage of 40–150 kW starts at a random hour.
+- **Load shedding (optional):** daily 4 h or 8 h outages, or supply one day in three, with
+  extra demand when supply returns (cold load pickup).
 - **The utility's view:** a feeder-head meter, six transformer meters with 2% noise and 20%
   missing readings, and daily billing per transformer area. No customer smart meters.
 
@@ -137,6 +142,10 @@ On 25 test scenarios (full log, including a corrected earlier claim, in [`docs/r
    no false alarms in 30 clean weeks (held-out test), timed their start to the hour, and
    narrowed the location to a section of about 8 of 32 buses (location AUC 0.91, up from
    0.57-0.68).
+6. **Survives load shedding.** With daily 4-8 hour outages, or supply only one day in three
+   (about 26 hours a week), theft is still located at 0.91-0.94 AUC and the total stolen
+   estimated within 4%. Under heavy rationing, cable faults are mostly missed in a single
+   week, so a month or more of data is advised.
 
 **How it works:** for each feeder, it finds the theft pattern that best explains the
 substation meter, a few transformer meters and the billing records, while obeying the

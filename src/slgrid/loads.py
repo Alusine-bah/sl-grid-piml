@@ -119,3 +119,61 @@ def generate_profiles(customers: pd.DataFrame, n_days: int = 1, seed: int = 0,
     cols = customers.index
     return {"p_mw": pd.DataFrame(p, index=idx, columns=cols),
             "q_mvar": pd.DataFrame(q, index=idx, columns=cols)}
+
+
+# ----------------------------------------------------------------------------- load shedding
+SHEDDING_PATTERNS = {
+    "none": "Supply all day",
+    "4h": "4 hours off per day",
+    "8h": "8 hours off per day",
+    "rotation": "Rotation: on 7 pm to 7 am, one day in three",
+}
+
+
+def supply_schedule(n_days: int, pattern: str = "none", rng: np.random.Generator | None = None) -> np.ndarray:
+    """Hourly supply status of the feeder: 1 = energised, 0 = switched off.
+
+    Patterns:
+      none       supply all day
+      4h, 8h     one block of that many hours off per day, starting at a random hour
+                 (load shedding / rationing in blocks)
+      rotation   the 2008 NPA load-sharing programme for domestic feeders in Western Area:
+                 supplied 7 pm to 7 am, one day in three (JICA 2009, Table 3.4-17; docs/sources.md S6)
+    """
+    rng = rng or np.random.default_rng(0)
+    T = n_days * 24
+    on = np.ones(T)
+    if pattern in ("4h", "8h"):
+        k = int(pattern[:-1])
+        for d in range(n_days):
+            start = d * 24 + int(rng.integers(0, 24))
+            on[start:start + k] = 0
+    elif pattern == "rotation":
+        on[:] = 0
+        phase = int(rng.integers(0, 3))
+        for d in range(n_days):
+            if (d + phase) % 3 == 0:
+                on[d * 24 + 19: d * 24 + 31] = 1      # 19:00 to 07:00 next day
+        on = on[:T]
+    elif pattern != "none":
+        raise ValueError(f"unknown shedding pattern: {pattern}")
+    return on
+
+
+def apply_supply(p_mw: pd.DataFrame, q_mvar: pd.DataFrame, on: np.ndarray,
+                 cold_load: float = 0.3) -> dict[str, pd.DataFrame]:
+    """Zero demand while the feeder is off and add the surge when it comes back.
+
+    When supply returns after an outage, fridges, freezers, fans and water heaters all
+    restart at once ("cold load pickup"), so demand in the first hours is higher than
+    usual. Modelled as +cold_load in the first hour back and +cold_load/2 in the second.
+    The size is an assumption (typical values are 20-50%), not a Freetown measurement.
+    """
+    on = np.asarray(on, dtype=float)
+    mult = on.copy()
+    for t in range(1, len(on)):
+        if on[t] and not on[t - 1]:
+            mult[t] *= 1 + cold_load
+            if t + 1 < len(on) and on[t + 1]:
+                mult[t + 1] *= 1 + cold_load / 2
+    return {"p_mw": p_mw.mul(mult, axis=0), "q_mvar": q_mvar.mul(mult, axis=0)}

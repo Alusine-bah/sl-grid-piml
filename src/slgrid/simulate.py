@@ -7,7 +7,7 @@ import pandapower as pp
 
 
 def run_timeseries(net: pp.pandapowerNet, p_mw: pd.DataFrame,
-                   q_mvar: pd.DataFrame) -> dict[str, pd.DataFrame]:
+                   q_mvar: pd.DataFrame, supply: np.ndarray | None = None) -> dict[str, pd.DataFrame]:
     """Run a power flow for every row of p_mw / q_mvar.
 
     Returns per-timestep results:
@@ -18,7 +18,14 @@ def run_timeseries(net: pp.pandapowerNet, p_mw: pd.DataFrame,
       bus_q_mvar true reactive demand at each load bus
       summary    source power, feeder-head power (11 kV side of the substation),
                  total load, total losses, min voltage
+      supply     1 = feeder energised, 0 = switched off (load shedding)
+
+    While the feeder is switched off (supply = 0) all its loads are zero, no power flows,
+    and every bus beyond the substation 11 kV busbar is dead (voltage 0). The busbar itself
+    (bus_0) stays energised.
     """
+    T = len(p_mw)
+    supply = np.ones(T) if supply is None else np.asarray(supply, dtype=float)
     names = net.bus["name"].values
     load_bus_names = net.bus.loc[net.load["bus"].values, "name"].values
     vm, lp, ll, summ, bp, bq = [], [], [], [], [], []
@@ -26,21 +33,25 @@ def run_timeseries(net: pp.pandapowerNet, p_mw: pd.DataFrame,
         net.load["p_mw"] = p_mw.loc[t].values
         net.load["q_mvar"] = q_mvar.loc[t].values
         pp.runpp(net, numba=True, init="results" if t != p_mw.index[0] else "auto")
-        vm.append(net.res_bus["vm_pu"].values.copy())
-        lp.append(net.res_line["p_from_mw"].values.copy())
-        ll.append(net.res_line["pl_mw"].values.copy())
+        v = net.res_bus["vm_pu"].values.copy()
+        if not supply[len(vm)]:
+            v[~np.isin(names, ["sub_33kV", "bus_0"])] = 0.0
+        vm.append(v)
+        lp.append(net.res_line["p_from_mw"].values.copy() * (1.0 if supply[len(lp)] else 0.0))
+        ll.append(net.res_line["pl_mw"].values.copy() * (1.0 if supply[len(ll)] else 0.0))
         bp.append(net.load["p_mw"].values.copy())
         bq.append(net.load["q_mvar"].values.copy())
         p_src = net.res_ext_grid["p_mw"].sum()
         p_load = net.load["p_mw"].sum()
+        live = bool(supply[len(summ)])          # feeder breaker open = nothing flows into it
         summ.append({
             "p_source_mw": p_src,
             "p_load_mw": p_load,
-            "p_head_mw": net.res_trafo["p_lv_mw"].sum() * -1,
-            "q_head_mvar": net.res_trafo["q_lv_mvar"].sum() * -1,
-            "p_loss_line_mw": net.res_line["pl_mw"].sum(),
+            "p_head_mw": net.res_trafo["p_lv_mw"].sum() * -1 if live else 0.0,
+            "q_head_mvar": net.res_trafo["q_lv_mvar"].sum() * -1 if live else 0.0,
+            "p_loss_line_mw": net.res_line["pl_mw"].sum() if live else 0.0,
             "p_loss_trafo_mw": net.res_trafo["pl_mw"].sum(),
-            "vm_min_pu": net.res_bus["vm_pu"].iloc[1:].min(),
+            "vm_min_pu": net.res_bus["vm_pu"].iloc[1:].min() if supply[len(summ)] else np.nan,
             "bus_vm_min": names[1:][net.res_bus["vm_pu"].iloc[1:].values.argmin()],
         })
     idx = p_mw.index
@@ -55,4 +66,5 @@ def run_timeseries(net: pp.pandapowerNet, p_mw: pd.DataFrame,
         "line_p_mw": pd.DataFrame(lp, index=idx, columns=net.line["name"].values),
         "line_loss": pd.DataFrame(ll, index=idx, columns=net.line["name"].values),
         "summary": pd.DataFrame(summ, index=idx),
+        "supply": supply,
     }

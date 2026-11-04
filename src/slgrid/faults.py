@@ -41,6 +41,20 @@ from slgrid.topology import path_matrix
 V_KV = 11.0
 
 
+def energised_hours(head_p: np.ndarray) -> np.ndarray:
+    """Hours when the feeder was supplied, inferred from the substation meter.
+
+    During load shedding the feeder breaker is open and the meter reads (near) zero.
+    An hour counts as energised when its power is above 2% of the typical energised
+    level (and at least 2 kW). Missing readings count as off.
+    """
+    p = np.nan_to_num(np.asarray(head_p, dtype=float), nan=0.0)
+    pos = p[p > 0]
+    if not len(pos):
+        return np.zeros(len(p), dtype=bool)
+    return p > max(0.002, 0.02 * np.median(pos))
+
+
 @dataclass
 class FaultConfig:
     power_factor: float = 0.90
@@ -110,10 +124,14 @@ class FaultDetector:
         cfg, d = self.cfg, self.d
         P, Q, Vh = d["head"][s, :, 0], d["head"][s, :, 1], d["head"][s, :, 2]
         T = len(P)
+        on = energised_hours(P)
+        Vh = np.where(np.isfinite(Vh), Vh, 1.0)
         X = np.column_stack([np.ones(T), P, P ** 2])
         z = P - Q / self.tan
-        t_stat, tau, step, se = _step_scan(z, X, cfg.min_segment)
+        # Only energised hours: an outage is not a fault starting or stopping.
+        t_stat, tau, step, se = _step_scan(z, X, cfg.min_segment, mask=on)
         out = {"score": t_stat, "detected": bool(t_stat >= cfg.threshold),
+               "hours_on": int(on.sum()),
                "start_hour": int(tau) if tau >= 0 else None,
                "leak_kw": 1000 * step if tau >= 0 else 0.0,
                "bus_prob": np.zeros(len(self.buses)), "likely_section": []}
@@ -125,7 +143,7 @@ class FaultDetector:
         for k, m in enumerate(self.m_idx):
             v = d["meter_v"][s, :, k]
             mp_, mq_ = d["meter_p"][s, :, k], d["meter_q"][s, :, k]
-            ok = np.isfinite(v) & np.isfinite(mp_) & np.isfinite(mq_)
+            ok = np.isfinite(v) & np.isfinite(mp_) & np.isfinite(mq_) & on
             # Voltage drop to the meter, explained by feeder load, substation voltage and
             # the meter's own load; what is left steps up when the leak starts.
             Xv = np.column_stack([np.ones(T), P, Q, P ** 2, Vh,
@@ -134,7 +152,7 @@ class FaultDetector:
             if np.isfinite(dv):
                 obs.append(dv); sd.append(sv); pred_unit.append(self.ZR[m])   # per MW at each bus
             mp, mq = d["meter_p"][s, :, k], d["meter_q"][s, :, k]
-            ok = np.isfinite(mp) & np.isfinite(mq)
+            ok = np.isfinite(mp) & np.isfinite(mq) & on
             Xm = np.column_stack([np.ones(T), mp, mp ** 2])
             Xm[~ok] = 0
             dw, sw = _step_at(mp - mq / self.tan, Xm, tau, ok)

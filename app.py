@@ -21,6 +21,7 @@ import streamlit as st  # noqa: E402
 
 from slgrid.app_core import feeder_summary, locate, simulate_case, tree_layout  # noqa: E402
 from slgrid.io import FeederDataError, frames_to_standard, standard_to_frames  # noqa: E402
+from slgrid.loads import SHEDDING_PATTERNS  # noqa: E402
 
 st.set_page_config(page_title="Feeder Loss Locator", page_icon="⚡", layout="wide")
 
@@ -52,8 +53,10 @@ def usd_rates():
     return None, None
 
 @st.cache_data(show_spinner=False)
-def run_simulation(theft, n_meters, strategy, dropout, fault, days, seed, billing, bill_noise):
-    d = simulate_case(theft, n_meters, strategy, dropout, fault, days, seed, billing, bill_noise)
+def run_simulation(theft, n_meters, strategy, dropout, fault, days, seed, billing, bill_noise,
+                   shedding):
+    d = simulate_case(theft, n_meters, strategy, dropout, fault, days, seed, billing, bill_noise,
+                      shedding)
     return d, locate(d)
 
 
@@ -165,7 +168,9 @@ def fault_alert(d, res, names, show_truth):
 def results_view(d, res, names, show_truth, key):
     s = feeder_summary(d, res)
     c = st.columns(4)
-    c[0].metric("Energy into feeder", f"{s['head_mwh']:.0f} MWh", f"{s['days']} days", delta_color="off")
+    sup = (f"{s['days']} days" if s["hours_on"] == s["hours"]
+           else f"{s['days']} days, supplied {s['hours_on']} of {s['hours']} h")
+    c[0].metric("Energy into feeder", f"{s['head_mwh']:.0f} MWh", sup, delta_color="off")
     c[1].metric("Unbilled energy", f"{s['unbilled_pct']:.0f}%",
                 f"{s['head_mwh'] - s['billed_mwh']:.0f} MWh", delta_color="off")
     if show_truth:
@@ -319,6 +324,11 @@ with tab_sim:
                                     "Prepaid token sales can be 10-20% off, because people buy "
                                     "tokens when they have money, not when they use power.")
         dropout = c3.slider("Meter readings missing", 0.0, 0.8, 0.2, 0.1, format="%.1f")
+        shedding = c3.selectbox("Load shedding", list(SHEDDING_PATTERNS),
+                                format_func=SHEDDING_PATTERNS.get,
+                                help="Feeder switched off on a schedule. 'Rotation' is the 2008 "
+                                     "load-sharing programme for domestic feeders (JICA report). "
+                                     "Demand surges for two hours when supply returns.")
         fault = c3.checkbox("Include a cable fault", value=False)
         seed = c3.number_input("Random seed (changes the neighbourhoods and theft spots)",
                                0, 9999, 7)
@@ -327,7 +337,7 @@ with tab_sim:
         st.session_state["sim_done"] = True
         with st.spinner("Simulating the feeder and locating losses..."):
             d, res = run_simulation(theft, n_meters, strategy, dropout, fault, days, int(seed),
-                                    billing, bill_noise)
+                                    billing, bill_noise, shedding)
         results_view(d, res, None, show_truth=True, key="sim")
         with st.expander("Download this simulated feeder as utility CSV files"):
             st.write("These are the same five files a utility would upload in the next tab. "
@@ -349,7 +359,7 @@ with tab_own:
 |---|---|---|
 | `lines.csv` | from_bus, to_bus, r_ohm, x_ohm | Each 11 kV line section and its resistance and reactance in ohms. The substation bus is the one that never appears in `to_bus`. Must be radial. |
 | `transformers.csv` | bus, kva | Installed transformer capacity at each load bus (from the asset register). |
-| `head.csv` | hour, p_mw, q_mvar, v_pu | Substation 11 kV breaker readings, every hour, whole days. `hour` can be 0,1,2… or a timestamp. |
+| `head.csv` | hour, p_mw, q_mvar, v_pu | Substation 11 kV breaker readings, whole days. `hour` can be 0,1,2… or a timestamp. Hours when the feeder was switched off (load shedding) can be left out or given as zero. |
 | `meters.csv` | hour, bus, p_mw, q_mvar, v_pu | Any transformer check meters. Gaps are fine; can be empty (header only). |
 | `billing.csv` | day, bus, mwh — or just bus, mwh | Energy sold per transformer area: either per day, or one total per bus for the whole period (monthly bills or prepaid token sales). Monthly totals work almost as well as daily figures. |
 """)
@@ -482,6 +492,11 @@ power in the usual ratio. A failing cable joint draws real power only. So the su
 starts. The app scans for that step to find the start hour and leak size, then uses the step
 it causes in each transformer meter's voltage to estimate where the fault is. In tests it
 caught 28 of 30 faults with no false alarms in 30 clean weeks.
+
+**Load shedding.** Hours when the feeder was switched off are recognised from the substation
+meter (zero or missing readings) and left out, so outages are not mistaken for theft or
+faults. With very little supply (for example 24 hours a week), use a month or more of data:
+fault detection in particular needs energised hours before and after a fault starts.
 
 **Honest limits.** All results so far come from simulation calibrated to published Freetown
 data. Fault location is to a section of the feeder (typically 8 of 32 buses), not one exact

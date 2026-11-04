@@ -27,6 +27,8 @@ def remeter(d: dict, meter_buses, dropout: float = 0.2, noise: float = 0.02,
     Q = (P - d["fault_bus_p"][:, :, cols]) * np.tan(np.arccos(POWER_FACTOR))
     V = d["vm_pu"][:, :, vcols]
     mask = rng.random(P.shape) < dropout
+    if "supply" in d:                     # meters are dead while the feeder is switched off
+        mask = mask | (d["supply"][:, :, None] == 0)
     noisy = lambda x, sd: x * rng.normal(1.0, sd, size=x.shape)   # noqa: E731
     out["meter_p"] = np.where(mask, np.nan, noisy(P, noise))
     out["meter_q"] = np.where(mask, np.nan, noisy(Q, noise))

@@ -14,6 +14,7 @@ Truth (for training targets and scoring only):
   is_theft        [S, B]     bus label
   is_fault        [S, B]     bus label
   households      [S, B]     true number of households behind each bus (varies by scenario)
+  supply          [S, T]     1 = feeder energised, 0 = switched off (load shedding)
 
 Asset data (known to the utility):
   transformer_kva [S, B]     installed transformer capacity behind each bus, kVA
@@ -35,7 +36,8 @@ import pandas as pd
 
 from slgrid.anomalies import ScenarioConfig, inject
 from slgrid.freetown import build_freetown_feeder
-from slgrid.loads import assign_customers, generate_profiles, perturb_customers
+from slgrid.loads import (apply_supply, assign_customers, generate_profiles,
+                          perturb_customers, supply_schedule)
 from slgrid.metering import MeterConfig, observe
 from slgrid.simulate import run_timeseries
 
@@ -50,6 +52,8 @@ class DatasetConfig:
     dropout: float = 0.2
     customer_spread: float = 0.3   # random variation of customers per bus between scenarios
     kva_spread: float = 0.35       # how loosely transformer ratings follow actual peak load
+    shedding: str = "none"         # load-shedding pattern (see loads.SHEDDING_PATTERNS)
+    cold_load: float = 0.3         # demand surge when supply returns after an outage
     seed: int = 0
 
 
@@ -72,7 +76,7 @@ def generate(cfg: DatasetConfig, out_dir: str | Path, name: str = "dataset",
         return g.T.groupby(level=0).sum().T[bus_cols].values
 
     keys = ["true_bus_p", "theft_bus_p", "fault_bus_p", "vm_pu", "line_loss",
-            "is_theft", "is_fault", "households", "transformer_kva", "head", "meter_p", "meter_q", "meter_v", "billing"]
+            "is_theft", "is_fault", "households", "transformer_kva", "supply", "head", "meter_p", "meter_q", "meter_v", "billing"]
     store = {k: [] for k in keys}
     rows = []
 
@@ -86,8 +90,11 @@ def generate(cfg: DatasetConfig, out_dir: str | Path, name: str = "dataset",
         scfg = ScenarioConfig(target_ntl=ntl, n_fault_buses=n_fault)
         cust = perturb_customers(base_cust, rng, cfg.customer_spread) if cfg.customer_spread else base_cust
         demand = generate_profiles(cust, n_days=cfg.n_days, seed=int(rng.integers(1 << 31)))
-        sc = inject(cust, demand["p_mw"], scfg, rng)
-        res = run_timeseries(net, sc["p_mw"], sc["q_mvar"])
+        on = supply_schedule(cfg.n_days, cfg.shedding, rng)
+        if cfg.shedding != "none":
+            demand = apply_supply(demand["p_mw"], demand["q_mvar"], on, cfg.cold_load)
+        sc = inject(cust, demand["p_mw"], scfg, rng, supply=on)
+        res = run_timeseries(net, sc["p_mw"], sc["q_mvar"], supply=on)
         obs = observe(res, sc["billed_mw"], cust, mcfg, rng)
 
         lab = sc["labels"].copy()
@@ -101,6 +108,7 @@ def generate(cfg: DatasetConfig, out_dir: str | Path, name: str = "dataset",
         store["line_loss"].append(res["line_loss"].values)
         store["is_theft"].append(lab["is_theft"].values)
         store["is_fault"].append(lab["is_fault"].values)
+        store["supply"].append(on)
         hh = cust.assign(bus=[f"bus_{b}" for b in cust["feeder_bus"]]).groupby("bus")["households"].sum()
         store["households"].append(hh.loc[bus_cols].values)
         # Installed transformer capacity behind each bus (from an asset register).
@@ -124,6 +132,7 @@ def generate(cfg: DatasetConfig, out_dir: str | Path, name: str = "dataset",
             "tech_loss": (s_["p_loss_line_mw"].sum()) / s_["p_head_mw"].sum(),
             "unbilled_seen": 1 - obs["billing_mwh"].values.sum() / obs["head"]["p_mw"].sum(),
             "vm_min": s_["vm_min_pu"].min(),
+            "hours_on": int(on.sum()),
         })
 
     arrays = {k: np.stack(v) for k, v in store.items()}

@@ -9,7 +9,9 @@ A utility provides five CSV files for one 11 kV feeder:
                     One row per load bus (a distribution transformer, or a group of them).
   head.csv          hour, p_mw, q_mvar, v_pu
                     Substation 11 kV breaker readings, one row per hour. `hour` may be an
-                    integer (0, 1, 2, ...) or a timestamp.
+                    integer (0, 1, 2, ...) or a timestamp. Hours when the feeder was switched
+                    off (load shedding) may be left out or given as zero power; both are
+                    treated as "supply off".
   meters.csv        hour, bus, p_mw, q_mvar, v_pu
                     Readings from transformer check meters. Any number of buses (zero is
                     allowed: an empty file with just the header). Missing hours are fine.
@@ -19,7 +21,7 @@ A utility provides five CSV files for one 11 kV feeder:
                     bus for the whole period (no `day` column), as with monthly bills or
                     prepaid token sales.
 
-The period must be whole days: head.csv covers 24 x (number of days) hours.
+The period is whole days. Hours with no supply (load shedding) may be left out of head.csv.
 
 These are converted to the arrays the models use (see docs/data_format.md), with a
 leading scenario dimension of 1.
@@ -42,15 +44,24 @@ class FeederDataError(ValueError):
     """Raised with a message a utility engineer can act on."""
 
 
-def _to_index(col: pd.Series, unit: str) -> pd.Series:
-    """Integers stay as they are; timestamps/dates become 0-based hour/day numbers."""
+def _to_index(col: pd.Series, unit: str, t0: pd.Timestamp | None = None) -> pd.Series:
+    """Hour/day numbers counted from the start of the first day.
+
+    Integers are used as they are (0 = first hour or day). Timestamps and dates are counted
+    from midnight of `t0` (default: the first day in the column). Anchoring at midnight, not
+    at the first reading, keeps the timeline right when outage hours at the start of the
+    period are simply left out of the file.
+    """
     if pd.api.types.is_numeric_dtype(col):
-        return col.astype(int) - int(col.min())
+        if (col < 0).any():
+            raise FeederDataError(f"The '{unit}' column has negative numbers; count from 0.")
+        return col.astype(int)
     t = pd.to_datetime(col, errors="coerce")
     if t.isna().any():
         raise FeederDataError(f"Could not read some values in the '{unit}' column as numbers or dates.")
+    start = (t.min() if t0 is None else t0).floor("D")
     step = pd.Timedelta(hours=1) if unit == "hour" else pd.Timedelta(days=1)
-    return ((t - t.min()) / step).round().astype(int)
+    return ((t - start) / step).round().astype(int)
 
 
 def frames_to_standard(frames: dict[str, pd.DataFrame]) -> tuple[dict, dict]:
@@ -101,28 +112,45 @@ def frames_to_standard(frames: dict[str, pd.DataFrame]) -> tuple[dict, dict]:
         raise FeederDataError(f"transformers.csv has no kVA rating for bus(es): {', '.join(missing)}")
 
     head = frames["head"].copy()
-    head["hour"] = _to_index(head["hour"], "hour")
+    raw_hours = head["hour"]
+    t0 = None if pd.api.types.is_numeric_dtype(raw_hours) else pd.to_datetime(raw_hours, errors="coerce").min()
+    head["hour"] = _to_index(raw_hours, "hour")
     head = head.sort_values("hour").drop_duplicates("hour")
-    n_t = int(head["hour"].max()) + 1
-    if n_t % 24 or n_t < 24:
-        raise FeederDataError(f"head.csv covers {n_t} hours; it must cover whole days (24, 48, ... hours).")
-    head = head.set_index("hour").reindex(range(n_t))
-    if head[["p_mw", "q_mvar", "v_pu"]].isna().any().any():
-        raise FeederDataError("head.csv has missing hours. The substation meter must cover every hour.")
-    n_d = n_t // 24
+    last_hour = int(head["hour"].max())
 
     bill = frames["billing"].copy()
     bill["bus"] = bill["bus"].astype(str).str.strip()
+    daily = "day" in bill.columns and bill["day"].nunique() > 1
+    if daily:
+        bill["day"] = _to_index(bill["day"], "day", t0)
+        n_d = int(bill["day"].max()) + 1
+        if last_hour >= 24 * n_d:
+            raise FeederDataError(f"head.csv runs to hour {last_hour} but billing.csv covers only {n_d} "
+                                  "days. Give billing for every day, or remove the day column and give "
+                                  "one total per bus for the whole period.")
+        if last_hour < 24 * (n_d - 1):
+            raise FeederDataError(f"head.csv stops at hour {last_hour} but billing.csv covers {n_d} days; "
+                                  "head.csv must cover whole days (24, 48, ... hours). Hours with no "
+                                  "supply may be left out, but not whole days at the end.")
+    else:
+        n_d = last_hour // 24 + 1
+    n_t = 24 * n_d
+    head = head.set_index("hour").reindex(range(n_t))
+    # Missing hours = feeder switched off (load shedding) or meter gaps: no power flowed
+    # as far as the model is concerned. Too few hours left means the file is unusable.
+    off = head["p_mw"].isna()
+    head.loc[off, ["p_mw", "q_mvar"]] = 0.0
+    head.loc[off, "v_pu"] = np.nan
+    if (~off).sum() < 12:
+        raise FeederDataError("head.csv has fewer than 12 hours with readings; the model needs at "
+                              "least 12 energised hours (a month or more is recommended).")
+    if head.loc[~off, ["q_mvar", "v_pu"]].isna().any().any():
+        raise FeederDataError("head.csv has hours with power but no q_mvar or v_pu reading.")
+
     unknown = sorted(set(bill["bus"]) - set(load_buses))
     if unknown:
         raise FeederDataError(f"billing.csv lists bus(es) not in lines.csv: {', '.join(unknown[:5])}")
-    daily = "day" in bill.columns and bill["day"].nunique() > 1
     if daily:
-        bill["day"] = _to_index(bill["day"], "day")
-        if bill["day"].max() + 1 != n_d:
-            raise FeederDataError(f"billing.csv covers {bill['day'].max() + 1} days but head.csv covers "
-                                  f"{n_d}. Give one row per day per bus, or remove the day column and "
-                                  "give one total per bus for the whole period.")
         billing = (bill.pivot_table(index="day", columns="bus", values="mwh", aggfunc="sum")
                    .reindex(index=range(n_d), columns=load_buses).fillna(0.0))
     else:
@@ -134,12 +162,7 @@ def frames_to_standard(frames: dict[str, pd.DataFrame]) -> tuple[dict, dict]:
 
     met = frames["meters"].copy()
     if len(met):
-        h0 = frames["head"]["hour"]
-        if pd.api.types.is_numeric_dtype(h0):
-            met["hour"] = met["hour"].astype(int) - int(h0.min())
-        else:
-            t0 = pd.to_datetime(h0).min()
-            met["hour"] = ((pd.to_datetime(met["hour"]) - t0) / pd.Timedelta(hours=1)).round().astype(int)
+        met["hour"] = _to_index(met["hour"], "hour", t0)
         met = met[(met["hour"] >= 0) & (met["hour"] < n_t)]
         met["bus"] = met["bus"].astype(str).str.strip()
         unknown = sorted(set(met["bus"]) - set(load_buses))

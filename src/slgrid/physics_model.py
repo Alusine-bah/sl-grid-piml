@@ -123,18 +123,22 @@ class PhysicsInformedLocator:
         period ([1, B]), as with monthly bills or prepaid token sales.
         """
         bill = self.d["billing"][s]                      # [D, B] MWh
-        head = self.d["head"][s, :, 0]                   # [T]
+        from slgrid.faults import energised_hours
+        head = self.d["head"][s, :, 0]
+        head = np.where(energised_hours(head), np.nan_to_num(head), 0.0)   # [T]
         T = len(head)
         if bill.shape[0] == T // 24 and bill.shape[0] > 1:
             n_d = bill.shape[0]
             shape = head[: n_d * 24].reshape(n_d, 24)
-            shape = shape / shape.sum(axis=1, keepdims=True)
+            tot = shape.sum(axis=1, keepdims=True)
+            shape = np.divide(shape, tot, out=np.zeros_like(shape), where=tot > 0)
             return (shape[:, :, None] * bill[:, None, :]).reshape(n_d * 24, -1)   # [T, B] MW
-        shape = head / head.sum()
+        shape = head / max(head.sum(), 1e-12)
         return shape[:, None] * bill.sum(axis=0)[None, :]
 
-    def _ac_corrections(self, P, Q, v_head):
-        """Losses and LinDistFlow voltage errors from a full AC power flow."""
+    def _ac_corrections(self, P, Q, v_head, on=None):
+        """Losses and LinDistFlow voltage errors from a full AC power flow.
+        Hours with the feeder switched off (on = False) are skipped: no flow, no losses."""
         T = P.shape[0]
         loss_p, loss_q = np.zeros(T), np.zeros(T)
         v_corr = np.zeros((T, len(self.meters)))
@@ -142,6 +146,8 @@ class PhysicsInformedLocator:
         bus_names = self.net.bus["name"].values
         m_rows = [int(np.flatnonzero(bus_names == m)[0]) for m in self.meters]
         for t in range(T):
+            if on is not None and not on[t]:
+                continue
             self.net.load["p_mw"] = P[t]
             self.net.load["q_mvar"] = Q[t]
             self.net.ext_grid["vm_pu"] = v_head[t]
@@ -161,6 +167,13 @@ class PhysicsInformedLocator:
         M = len(self.meters)
         head_p, head_q, v_head = d["head"][s, :, 0], d["head"][s, :, 1], d["head"][s, :, 2]
         vm, mp, mq = d["meter_v"][s], d["meter_p"][s], d["meter_q"][s]
+        # Hours the feeder was switched off (load shedding) carry no information:
+        # loads, losses, cable charging and any leak are all zero then.
+        from slgrid.faults import energised_hours
+        on = energised_hours(head_p)
+        head_p = np.where(on, np.nan_to_num(head_p), 0.0)
+        head_q = np.where(on, np.nan_to_num(head_q), 0.0)
+        v_head = np.where(on & np.isfinite(v_head), v_head, 1.0)
 
         # Unknown vector: [theta (B), c (B), q0 (1), v_off (M)]
         n = 2 * B + 1 + M
@@ -189,7 +202,7 @@ class PhysicsInformedLocator:
         # With it: if a new fault is detected, leaks start at the detected hour, the period
         # is split into before/after so the step is visible, and the total leak and its
         # likely location come from the detector; if none is detected, no leak is fitted.
-        fault_on = np.ones(T)
+        fault_on = on.astype(float)
         fault_w = np.full(B, cfg.fault_weight)
         fault_ub = np.full(B, cfg.max_fault_mw)
         fault_sum = None
@@ -197,7 +210,7 @@ class PhysicsInformedLocator:
         if self.fd is not None:
             fault = self.fd.analyse(s)
             if fault["detected"]:
-                fault_on = (hours >= fault["start_hour"]).astype(float)
+                fault_on = ((hours >= fault["start_hour"]) & on).astype(float)
                 grp = grp * 2 + fault_on.astype(int)
                 p = fault["bus_prob"]
                 fault_w = cfg.fault_weight * (1.0 - p / p.max()) + 1.0
@@ -214,11 +227,12 @@ class PhysicsInformedLocator:
                 blocks.append(Ag); rhs.append(yg)
 
             # 1. active power balance
+            # (energised hours only: dead hours would dilute the weight of these equations)
             A = np.zeros((T, n)); A[:, i_th] = b; A[:, i_c] = fault_on[:, None]
-            add(A, head_p - b.sum(1) - loss_p, grp, cfg.sd_head_p)
+            add(A[on], (head_p - b.sum(1) - loss_p)[on], grp[on], cfg.sd_head_p)
             # 2. reactive power balance
-            A = np.zeros((T, n)); A[:, i_th] = self.tan * b; A[:, i_q0] = 1.0
-            add(A, head_q - self.tan * b.sum(1) - loss_q, grp, cfg.sd_head_q)
+            A = np.zeros((T, n)); A[:, i_th] = self.tan * b; A[:, i_q0] = on
+            add(A[on], (head_q - self.tan * b.sum(1) - loss_q)[on], grp[on], cfg.sd_head_q)
             # 3. voltage drop to each meter
             for k, m in enumerate(self.m_idx):
                 ok = ~np.isnan(vm[:, k])
@@ -258,7 +272,7 @@ class PhysicsInformedLocator:
             if it < cfg.ac_iterations:
                 P = b * (1 + theta) + fault_on[:, None] * c
                 Q = b * (1 + theta) * self.tan
-                loss_p, loss_q, v_corr = self._ac_corrections(P, Q, v_head)
+                loss_p, loss_q, v_corr = self._ac_corrections(P, Q, v_head, on)
 
         stolen = (b * theta).sum(axis=0)                 # MWh over the scenario
         score = theta / (1 + theta)

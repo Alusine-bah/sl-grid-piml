@@ -69,10 +69,11 @@ def _pick_hotspots(mean_load, allowed, cfg, rng):
 
 
 def inject(customers: pd.DataFrame, demand_p: pd.DataFrame, cfg: ScenarioConfig,
-           rng: np.random.Generator) -> dict:
+           rng: np.random.Generator, supply: np.ndarray | None = None) -> dict:
     """Split physical demand into billed and stolen parts, and add faults.
 
     `demand_p` is the true physical consumption at each load (from loads.generate_profiles).
+    `supply` (optional, 1 = energised) switches faults off while the feeder is off.
 
     Returns a dict with:
       p_mw, q_mvar     total physical demand per load incl. faults (power-flow input)
@@ -109,6 +110,8 @@ def inject(customers: pd.DataFrame, demand_p: pd.DataFrame, cfg: ScenarioConfig,
         kw = rng.uniform(*cfg.fault_kw)
         start = int(rng.integers(0, n_t))
         fault[start:, j] = kw / 1000.0
+        if supply is not None:
+            fault[:, j] *= supply
         labels.iloc[j, labels.columns.get_loc("is_fault")] = True
         labels.iloc[j, labels.columns.get_loc("fault_kw")] = kw
         labels.iloc[j, labels.columns.get_loc("fault_start")] = start

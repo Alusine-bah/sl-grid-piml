@@ -39,10 +39,21 @@ def metered_mask(d) -> np.ndarray:
 
 
 def _metered_energy(d, s_idx):
-    """Energy at each metered bus over the scenario, scaling up for missing hours."""
+    """Energy at each metered bus over the scenario, scaling up for missing hours.
+
+    Only hours when the feeder was energised count (load shedding leaves the meters dead
+    and the feeder empty), so the average over readings is scaled by energised hours.
+    """
+    from slgrid.faults import energised_hours
     p = d["meter_p"][s_idx]                               # [S, T, M]
-    n_t = p.shape[1]
-    return np.nanmean(p, axis=1) * n_t                   # MWh
+    out = np.zeros(p.shape[::2])
+    for i, s in enumerate(s_idx):
+        on = energised_hours(d["head"][s, :, 0])
+        vals = p[i][on]
+        with np.errstate(invalid="ignore"):
+            mean = np.nanmean(vals, axis=0) if len(vals) else np.full(p.shape[2], np.nan)
+        out[i] = np.nan_to_num(mean) * on.sum()
+    return out                                            # [S, M] MWh
 
 
 def energy_audit(d, s_idx, tech_loss_share: float = 0.03):

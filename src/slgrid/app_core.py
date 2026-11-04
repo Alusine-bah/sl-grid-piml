@@ -15,14 +15,16 @@ from slgrid.studies import placement, rebill, remeter
 
 def simulate_case(theft_level: float, n_meters: int, strategy: str, dropout: float,
                   fault: bool, n_days: int, seed: int, billing: str = "daily",
-                  billing_noise: float = 0.03) -> dict:
+                  billing_noise: float = 0.03, shedding: str = "none") -> dict:
     """Simulate one feeder period and return it in the standard format (with truth).
 
     billing: "daily" (one value per day per bus) or "period" (one total per bus, as with
     monthly bills or prepaid token sales). billing_noise: relative error of each value.
+    shedding: load-shedding pattern (see loads.SHEDDING_PATTERNS).
     """
     cfg = DatasetConfig(n_scenarios=1, n_days=n_days, ntl_levels=(theft_level,),
-                        fault_probability=1.0 if fault else 0.0, dropout=dropout, seed=seed)
+                        fault_probability=1.0 if fault else 0.0, dropout=dropout, seed=seed,
+                        shedding=shedding)
     with tempfile.TemporaryDirectory() as tmp:
         d = dict(np.load(generate(cfg, tmp, name="case", progress=False)))
     buses = placement(d, n_meters, strategy, seed=seed)
@@ -77,7 +79,8 @@ def locate(d: dict, power_factor: float = 0.90, tech_loss: float = 0.03) -> pd.D
 
 
 def feeder_summary(d: dict, res: pd.DataFrame) -> dict:
-    head_e = d["head"][0, :, 0].sum()
+    from slgrid.faults import energised_hours
+    head_e = np.nansum(d["head"][0, :, 0])
     billed = d["billing"][0].sum()
     s = {
         "days": d["head"].shape[1] // 24,
@@ -88,6 +91,8 @@ def feeder_summary(d: dict, res: pd.DataFrame) -> dict:
         "stolen_rules": res.stolen_rules_mwh.sum(),
         "n_meters": int(res.metered.sum()),
         "n_buses": len(res),
+        "hours_on": int(energised_hours(d["head"][0, :, 0]).sum()),
+        "hours": int(d["head"].shape[1]),
     }
     if "true_stolen_mwh" in res:
         s["stolen_true"] = res.true_stolen_mwh.sum()

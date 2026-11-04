@@ -52,6 +52,9 @@ def observe(res: dict, billed_mw: pd.DataFrame, customers: pd.DataFrame,
     q_by_bus = res["bus_q_mvar"][cols]
     vm = res["vm_pu"][cols]
     mask = rng.random((n_t, len(cols))) < cfg.dropout
+    # Transformer meters lose power when the feeder is switched off: no readings.
+    off = np.asarray(res.get("supply", np.ones(n_t))) == 0
+    mask = mask | off[:, None]
     meters = {
         "p_mw": noisy(load_by_bus, cfg.meter_noise).mask(mask),
         "q_mvar": noisy(q_by_bus, cfg.meter_noise).mask(mask),
