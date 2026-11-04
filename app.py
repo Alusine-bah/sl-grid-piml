@@ -130,9 +130,12 @@ def inspection_table(res: pd.DataFrame, names: dict | None, show_truth: bool) ->
         "Billed (MWh)": res.billed_mwh.round(2),
         "Est. stolen (MWh)": res.stolen_physics_mwh.round(2),
         "Est. stolen share": (100 * res.share_physics).round(0).astype(int).astype(str) + "%",
-        "Fault probability": np.where(res.fault_prob > 0.005,
-                                      (100 * res.fault_prob).round(0).astype(int).astype(str) + "%", ""),
     })
+    # Only when a cable fault was detected: chance that the leak is at each bus.
+    if res.attrs.get("fault", {}).get("detected"):
+        t["Fault probability"] = np.where(res.fault_prob >= 0.005,
+                                          (100 * res.fault_prob).round(0).astype(int).astype(str) + "%",
+                                          "<1%")
     if show_truth:
         t["True stolen (MWh)"] = res.true_stolen_mwh.round(2)
         t["Truth"] = np.where(res.true_hotspot, "theft",
