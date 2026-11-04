@@ -398,6 +398,13 @@ with tab_study:
     exp_path = ROOT / "results" / "experiments.csv"
     if exp_path.exists():
         e = pd.read_csv(exp_path)
+        nice = {"B1 energy audit": "Energy audit (today's method)",
+                "B1b audit + ratings": "Audit + transformer ratings",
+                "B1c combined rules": "Combined rules",
+                "B2 pure ML (3 weeks)": "Machine learning, 3 labelled weeks",
+                "B2 pure ML (75 weeks)": "Machine learning, 75 labelled weeks",
+                "P1 physics-informed": "Physics-informed (this project)"}
+        e["method"] = e["method"].map(lambda m: nice.get(m, m))
         allb = e[e.buses == "all buses"].set_index("method")
         unm = e[e.buses == "unmetered"].set_index("method")
         tbl = pd.DataFrame({
@@ -408,16 +415,21 @@ with tab_study:
         })
         st.dataframe(tbl, width="stretch")
         plot = unm.reset_index()[["method", "AUC"]]
-        plot["group"] = np.where(plot.method.str.startswith("P1"), "This project",
-                                 np.where(plot.method.str.startswith("B2"), "Needs labelled theft",
-                                          "No labels"))
-        st.altair_chart(alt.Chart(plot).mark_bar().encode(
-            x=alt.X("AUC:Q", scale=alt.Scale(domain=[0.5, 1.0]), title="AUC at unmetered buses"),
-            y=alt.Y("method:N", sort="-x", title=""),
-            color=alt.Color("group:N", scale=alt.Scale(
-                domain=["No labels", "Needs labelled theft", "This project"],
-                range=[GREY, "#9fb3c8", ORANGE]), title="")).properties(height=230),
-            width="stretch")
+        plot["group"] = np.where(plot.method.str.contains("this project"), "This project",
+                                 np.where(plot.method.str.startswith("Machine"), "Needs labelled theft",
+                                          "No labels needed"))
+        plot["label"] = plot.AUC.round(2).map(lambda v: f"{v:.2f}")
+        base = alt.Chart(plot).encode(
+            x=alt.X("AUC:Q", scale=alt.Scale(domain=[0.5, 1.0]),
+                    title="Finding theft at unmetered transformers (AUC: 0.5 = guessing, 1 = perfect)"),
+            y=alt.Y("method:N", sort=list(plot.sort_values("AUC", ascending=False).method),
+                    title="", axis=alt.Axis(labelLimit=320)))
+        bars = base.mark_bar(clip=True).encode(color=alt.Color(
+            "group:N", title="", legend=alt.Legend(orient="bottom"), scale=alt.Scale(
+                domain=["No labels needed", "Needs labelled theft", "This project"],
+                range=[GREY, "#9fb3c8", ORANGE])))
+        text = base.mark_text(align="left", dx=4, fontSize=12).encode(text="label:N")
+        st.altair_chart((bars + text).properties(height=260), width="stretch")
     pl_path, rb_path = ROOT / "results" / "placement.csv", ROOT / "results" / "robustness.csv"
     c1, c2 = st.columns(2)
     if pl_path.exists():
@@ -434,11 +446,15 @@ with tab_study:
         c2.markdown("**Robustness** (AUC at unmetered buses)")
         long = pd.concat([rb.assign(method="Physics-informed", AUC=rb["AUC unmetered"]),
                           rb.assign(method="Combined rules", AUC=rb["B1c AUC unmetered"])])
+        long["test"] = long["test"].str.capitalize()
         c2.altair_chart(alt.Chart(long).mark_line(point=True).encode(
             x=alt.X("level:Q", title="Stress level"),
             y=alt.Y("AUC:Q", scale=alt.Scale(domain=[0.8, 0.96])),
-            color=alt.Color("method:N", scale=alt.Scale(range=[GREY, ORANGE]), title=""),
-            facet=alt.Facet("test:N", columns=3, title="")).properties(height=200, width=150))
+            color=alt.Color("method:N", scale=alt.Scale(
+                domain=["Combined rules", "Physics-informed"], range=[GREY, ORANGE]),
+                title="", legend=alt.Legend(orient="bottom")),
+            facet=alt.Facet("test:N", columns=3, title="")).properties(height=200, width=140)
+            .resolve_scale(x="independent"))
 
 # --- 4. How it works ------------------------------------------------------------------
 with tab_how:

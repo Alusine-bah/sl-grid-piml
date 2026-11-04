@@ -9,6 +9,23 @@ on distribution feeders with very few meters, using a Sierra Leone 11 kV feeder 
 
 **Status:** simulation study and interactive app complete. Next step: a test on a real feeder.
 
+## Screenshots
+
+**Simulate a feeder:** choose a situation; the app finds theft hotspots and flags a cable fault
+(blue diamonds) without being told where they are.
+
+![Simulation view with feeder map and fault alert](docs/img/app_simulate.png)
+
+**Inspection list and plan:** transformer areas ranked for inspection crews, how much stolen
+energy the top areas cover, and revenue at stake in a chosen currency.
+
+![Inspection list and inspection plan](docs/img/app_inspection.png)
+
+**Study results:** how the method compares with today's energy audit, rule-based methods and
+machine learning.
+
+![Study results](docs/img/app_study.png)
+
 ## Why
 Sierra Leone's distribution utility (EDSA) loses roughly half of the electricity it buys to
 technical and commercial losses. Most utilities in this situation have meters at only a few

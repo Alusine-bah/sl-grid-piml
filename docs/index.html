@@ -111,6 +111,10 @@ a { color: var(--accent); }
 a.cta { display: inline-block; background: var(--accent); color: #fff; text-decoration: none;
   font-weight: 600; padding: 12px 20px; border-radius: 8px; }
 a.cta:hover { filter: brightness(1.08); }
+figure.shot { margin: 16px 0 24px; }
+figure.shot img { width: 100%; height: auto; display: block; border: 1px solid var(--line);
+  border-radius: 10px; background: #fff; }
+figure.shot figcaption { font-size: 14px; color: var(--muted); margin-top: 8px; }
 footer { margin: 56px 0 0; padding: 24px 0 48px; border-top: 1px solid var(--line); font-size: 14px; color: var(--muted); }
 code { font-size: 14px; background: var(--surface); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; }
 @media (prefers-color-scheme: dark) {
@@ -145,6 +149,18 @@ code { font-size: 14px; background: var(--surface); border: 1px solid var(--line
 </header>
 
 <main class="wrap">
+
+<h2>The app</h2>
+<p>The <a href="https://sl-grid-piml.streamlit.app">interactive app</a> runs the real model. Simulate a
+feeder under any situation, or upload one real feeder's data, and get a feeder map of suspected theft,
+a ranked inspection list, an alert for cable faults, and the revenue at stake.</p>
+<figure class="shot"><img src="img/app_simulate.png" alt="App: simulation settings, results, fault alert and feeder map" loading="lazy">
+<figcaption>Simulation with 25% theft and a hidden 109 kW cable fault. The app flags the fault at hour 20
+in buses 13–14 (blue diamonds) and colours suspected theft by severity; green rings show the true
+hotspots, known only in simulation.</figcaption></figure>
+<figure class="shot"><img src="img/app_inspection.png" alt="App: inspection list and inspection plan" loading="lazy">
+<figcaption>Ranked inspection list, how much stolen energy each number of inspections covers, and the
+estimated monthly revenue lost.</figcaption></figure>
 
 <h2>The problem</h2>
 <p>Sierra Leone's Electricity Distribution and Supply Authority (EDSA) loses a large share of the
