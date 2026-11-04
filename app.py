@@ -19,7 +19,7 @@ import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 import streamlit as st  # noqa: E402
 
-from slgrid.app_core import feeder_summary, locate, simulate_case, tree_layout  # noqa: E402
+from slgrid.app_core import feeder_summary, locate, meter_list, simulate_case, tree_layout  # noqa: E402
 from slgrid.io import FeederDataError, frames_to_standard, standard_to_frames  # noqa: E402
 from slgrid.loads import SHEDDING_PATTERNS  # noqa: E402
 
@@ -29,6 +29,8 @@ ORANGE = "#c2410c"
 GREY = "#8a959e"
 EXAMPLE_DIR = ROOT / "data" / "example_feeder"
 FILES = ["lines", "transformers", "head", "meters", "billing"]
+PREPAID_FILES = ["customers", "tokens"]
+EXAMPLE_PREPAID_DIR = ROOT / "data" / "example_prepaid"
 CURRENCIES = {
     "USD": "US dollar", "SLE": "Sierra Leonean leone", "EUR": "Euro", "GBP": "British pound",
     "GHS": "Ghanaian cedi", "NGN": "Nigerian naira", "LRD": "Liberian dollar",
@@ -54,10 +56,11 @@ def usd_rates():
 
 @st.cache_data(show_spinner=False)
 def run_simulation(theft, n_meters, strategy, dropout, fault, days, seed, billing, bill_noise,
-                   shedding):
+                   shedding, mapping_error):
     d = simulate_case(theft, n_meters, strategy, dropout, fault, days, seed, billing, bill_noise,
-                      shedding)
-    return d, locate(d)
+                      shedding, mapping_error)
+    res = locate(d)
+    return d, res, meter_list(d, res)
 
 
 @st.cache_data(show_spinner=False)
@@ -65,7 +68,7 @@ def run_uploaded(frames_bytes: dict, power_factor: float, tech_loss: float):
     frames = {k: pd.read_csv(io.BytesIO(v)) for k, v in frames_bytes.items()}
     d, names = frames_to_standard(frames)
     res = locate(d, power_factor=power_factor, tech_loss=tech_loss)
-    return d, res, names
+    return d, res, names, meter_list(d, res)
 
 
 def label(bus: str, names: dict | None) -> str:
@@ -168,7 +171,46 @@ def fault_alert(d, res, names, show_truth):
             st.caption("Truth (simulation only): no fault in this period.")
 
 
-def results_view(d, res, names, show_truth, key):
+def meter_section(d, meters, names, show_truth, key):
+    v = d["vending"]
+    n_days = d["head"].shape[1] // 24
+    st.subheader("Prepaid meters to check")
+    st.caption("Each prepaid meter's recent token purchases (last 30 days) are compared with what "
+               "it bought before and with similar meters on the same transformer. The shortfall "
+               "is weighted by the estimated stolen share of its transformer area, so low buyers "
+               "where the feeder physics says energy is going missing come first. Illegal "
+               "connections with no meter cannot appear here: they are found by inspecting the "
+               "top transformer areas above.")
+    tok = v["tokens"]
+    recent = tok[tok.day >= n_days - 30]
+    c = st.columns(4)
+    c[0].metric("Prepaid meters", f"{len(v['customers']):,}")
+    c[1].metric("Purchases in the last 30 days", f"{len(recent):,}")
+    c[2].metric("Meters with no purchase in 30 days",
+                f"{int((meters.recent_kwh_day <= 0).sum()):,}")
+    if show_truth and "is_bypass" in meters:
+        top = meters.head(100)
+        c[3].metric("Top 100 that really bypass their meter", f"{100 * top.is_bypass.mean():.0f}%",
+                    f"vs {100 * meters.is_bypass.mean():.0f}% of all meters", delta_color="off")
+    t = pd.DataFrame({
+        "Rank": meters["rank"], "Meter": meters.meter,
+        "Bus": [label(b, names) for b in meters.bus], "Kind": meters.kind,
+        "Bought, last 30 days (kWh/day)": meters.recent_kwh_day.round(1),
+        "Bought before (kWh/day)": meters.earlier_kwh_day.round(1),
+        "Typical on this transformer (kWh/day)": meters.peer_kwh_day.round(1),
+        "Days since last purchase": meters.days_since_buy,
+        "Shortfall (kWh/day)": meters.missing_kwh_day.round(1),
+        "Area stolen share": (100 * meters.area_stolen_share).round(0).astype(int).astype(str) + "%",
+    })
+    if show_truth and "is_bypass" in meters:
+        t["Truth"] = np.where(meters.is_bypass, "bypass", np.where(meters.is_vacant, "vacant", "normal"))
+        t["Listed under wrong transformer"] = np.where(meters.bus != meters.true_bus, "yes", "")
+    st.dataframe(t.head(200), hide_index=True, width="stretch", height=380, key=f"{key}_mtbl")
+    st.download_button("Download full meter list (CSV)", t.to_csv(index=False).encode(),
+                       "prepaid_meter_list.csv", "text/csv", key=f"{key}_mdl")
+
+
+def results_view(d, res, names, show_truth, key, meters=None):
     s = feeder_summary(d, res)
     c = st.columns(4)
     sup = (f"{s['days']} days" if s["hours_on"] == s["hours"]
@@ -207,6 +249,8 @@ def results_view(d, res, names, show_truth, key):
     st.dataframe(table, hide_index=True, width="stretch", height=380, key=f"{key}_tbl")
     st.download_button("Download inspection list (CSV)", table.to_csv(index=False).encode(),
                        "inspection_list.csv", "text/csv", key=f"{key}_dl")
+    if meters is not None:
+        meter_section(d, meters, names, show_truth, key)
 
     st.subheader("Inspection plan and money at stake")
     c1, c2 = st.columns([2, 1])
@@ -319,9 +363,17 @@ with tab_sim:
                                              "largest": "Largest transformers",
                                              "random": "Random"}.get)
         billing = c2.selectbox("Billing data available",
-                               ["daily", "period"],
+                               ["daily", "period", "prepaid"],
                                format_func={"daily": "Daily per transformer area",
-                                            "period": "One total for the period (monthly bills / prepaid sales)"}.get)
+                                            "period": "One total for the period (monthly bills)",
+                                            "prepaid": "Prepaid token sales per meter (90 days)"}.get,
+                               help="Prepaid: every customer's token purchases are simulated, "
+                                    "and sales per transformer area come from the customer "
+                                    "list. Individual meters are then ranked for inspection.")
+        mapping = c2.slider("Meters listed under the wrong transformer (prepaid)", 0.0, 0.3, 0.05,
+                            0.05, format="%.2f",
+                            help="Share of prepaid customers that the customer database links "
+                                 "to the wrong transformer. Only used with prepaid token sales.")
         bill_noise = c1.slider("Billing error", 0.0, 0.3, 0.03, 0.01, format="%.2f",
                                help="How far each billed value is from what was really used. "
                                     "Prepaid token sales can be 10-20% off, because people buy "
@@ -339,11 +391,12 @@ with tab_sim:
     if go or "sim_done" in st.session_state:
         st.session_state["sim_done"] = True
         with st.spinner("Simulating the feeder and locating losses..."):
-            d, res = run_simulation(theft, n_meters, strategy, dropout, fault, days, int(seed),
-                                    billing, bill_noise, shedding)
-        results_view(d, res, None, show_truth=True, key="sim")
+            d, res, meters = run_simulation(theft, n_meters, strategy, dropout, fault, days,
+                                            int(seed), billing, bill_noise, shedding, mapping)
+        results_view(d, res, None, show_truth=True, key="sim", meters=meters)
         with st.expander("Download this simulated feeder as utility CSV files"):
-            st.write("These are the same five files a utility would upload in the next tab. "
+            st.write("These are the same files a utility would upload in the next tab "
+                     "(with prepaid sales: customers.csv and tokens.csv instead of billing.csv). "
                      "Useful as a filled-in example.")
             buf = io.BytesIO()
             with zipfile.ZipFile(buf, "w") as z:
@@ -354,8 +407,9 @@ with tab_sim:
 
 # --- 2. Own data ----------------------------------------------------------------------
 with tab_own:
-    st.write("Upload five CSV files describing one feeder. Start from the example files and "
-             "replace the numbers with your own.")
+    st.write("Upload CSV files describing one feeder: four network and meter files, plus either "
+             "billing per transformer area or, for prepaid customers, the customer list and "
+             "token sales. Start from the example files and replace the numbers with your own.")
     with st.expander("What each file contains", expanded=False):
         st.markdown("""
 | File | Columns | What it is |
@@ -364,45 +418,70 @@ with tab_own:
 | `transformers.csv` | bus, kva | Installed transformer capacity at each load bus (from the asset register). |
 | `head.csv` | hour, p_mw, q_mvar, v_pu | Substation 11 kV breaker readings, whole days. `hour` can be 0,1,2… or a timestamp. Hours when the feeder was switched off (load shedding) can be left out or given as zero. |
 | `meters.csv` | hour, bus, p_mw, q_mvar, v_pu | Any transformer check meters. Gaps are fine; can be empty (header only). |
-| `billing.csv` | day, bus, mwh — or just bus, mwh | Energy sold per transformer area: either per day, or one total per bus for the whole period (monthly bills or prepaid token sales). Monthly totals work almost as well as daily figures. |
+| **Either** `billing.csv` | day, bus, mwh — or just bus, mwh | Energy sold per transformer area: either per day, or one total per bus for the whole period (monthly bills). |
+| **or** `customers.csv` | meter, bus, (kind) | Prepaid customer list: the transformer area each meter is listed under. Optional `kind` (residential, commercial…). |
+| **and** `tokens.csv` | meter, day, kwh | Every token purchase from the vending system. `day` is a date, or a day number (0 = first day of `head.csv`, earlier history negative). A month or more of history before the period is best. |
 """)
-    ex = {k: (EXAMPLE_DIR / f"{k}.csv") for k in FILES}
-    if all(p.exists() for p in ex.values()):
-        buf = io.BytesIO()
-        with zipfile.ZipFile(buf, "w") as z:
-            for k, p in ex.items():
-                z.write(p, f"{k}.csv")
-        st.download_button("Download example files (.zip)", buf.getvalue(),
-                           "example_feeder.zip", "application/zip", key="ex_zip")
+    ex_sets = {"billing": (EXAMPLE_DIR, FILES),
+               "prepaid": (EXAMPLE_PREPAID_DIR, FILES[:4] + PREPAID_FILES)}
+    c1, c2 = st.columns(2)
+    for col, (kind, (folder, names_)) in zip((c1, c2), ex_sets.items()):
+        paths = {k: folder / f"{k}.csv" for k in names_}
+        if all(p.exists() for p in paths.values()):
+            buf = io.BytesIO()
+            with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+                for k, p in paths.items():
+                    z.write(p, f"{k}.csv")
+            col.download_button(
+                "Download example files (.zip)" if kind == "billing"
+                else "Download prepaid example files (.zip)",
+                buf.getvalue(), f"example_feeder{'_prepaid' if kind == 'prepaid' else ''}.zip",
+                "application/zip", key=f"ex_zip_{kind}")
 
-    use_example = st.toggle("Use the example files instead of uploading", value=False)
+    use_example = st.radio("Data", ["Upload my files", "Example: billing per area",
+                                    "Example: prepaid token sales"], horizontal=True)
     uploads = {}
-    if not use_example:
-        cols = st.columns(5)
-        for c, k in zip(cols, FILES):
-            f = c.file_uploader(f"{k}.csv", type="csv", key=f"up_{k}")
+    if use_example == "Upload my files":
+        cols = st.columns(4)
+        for i, k in enumerate(FILES[:4]):
+            f = cols[i].file_uploader(f"{k}.csv", type="csv", key=f"up_{k}")
+            if f is not None:
+                uploads[k] = f.getvalue()
+        cols = st.columns(3)
+        for c, k, lab in zip(cols, ["billing"] + PREPAID_FILES,
+                             ["billing.csv", "or prepaid: customers.csv", "and tokens.csv"]):
+            f = c.file_uploader(lab, type="csv", key=f"up_{k}")
             if f is not None:
                 uploads[k] = f.getvalue()
     else:
-        uploads = {k: p.read_bytes() for k, p in ex.items()}
+        folder, names_ = ex_sets["billing" if "billing" in use_example else "prepaid"]
+        uploads = {k: (folder / f"{k}.csv").read_bytes() for k in names_}
 
     c1, c2 = st.columns(2)
     pf = c1.slider("Typical power factor of loads", 0.75, 1.0, 0.90, 0.01)
     tl = c2.slider("Expected technical losses on the 11 kV network", 0.0, 0.10, 0.03, 0.01,
                    format="%.2f")
-    if len(uploads) == 5:
+    have_sales = "billing" in uploads or all(k in uploads for k in PREPAID_FILES)
+    if all(k in uploads for k in FILES[:4]) and have_sales:
+        if "billing" in uploads:
+            uploads = {k: v for k, v in uploads.items() if k not in PREPAID_FILES}
         try:
             with st.spinner("Checking the files and locating losses..."):
-                d, res, names = run_uploaded(uploads, pf, tl)
+                d, res, names, meters = run_uploaded(uploads, pf, tl)
             nb = d["billing"].shape[1]
+            sales = ("prepaid token sales" if "vending" in d
+                     else "daily billing" if nb > 1 else "one billing total per bus")
             st.success(f"Read a feeder with {len(res)} load buses, {int(res.metered.sum())} "
                        f"transformer meters and {d['head'].shape[1] // 24} days of data "
-                       f"({'daily billing' if nb > 1 else 'one billing total per bus'}).")
-            results_view(d, res, names, show_truth=False, key="own")
+                       f"({sales}).")
+            results_view(d, res, names, show_truth=False, key="own", meters=meters)
         except FeederDataError as e:
             st.error(f"There is a problem with the files: {e}")
     else:
-        st.info(f"Waiting for files: {', '.join(k + '.csv' for k in FILES if k not in uploads)}")
+        missing = [k + ".csv" for k in FILES[:4] if k not in uploads]
+        if not have_sales:
+            missing.append("billing.csv (or customers.csv + tokens.csv)")
+        st.info(f"Waiting for files: {', '.join(missing)}")
 
 # --- 3. Study results ---------------------------------------------------------------
 with tab_study:
@@ -469,6 +548,32 @@ with tab_study:
             facet=alt.Facet("test:N", columns=3, title="")).properties(height=200, width=140)
             .resolve_scale(x="independent"))
 
+    sh_path, pp_path = ROOT / "results" / "shedding.csv", ROOT / "results" / "prepaid.csv"
+    if sh_path.exists():
+        sh = pd.read_csv(sh_path)
+        st.markdown("**Load shedding** (40 feeder-weeks per pattern, half with a cable fault)")
+        st.dataframe(pd.DataFrame({
+            "Pattern": sh.shedding.map({"4h": "4 h off a day", "8h": "8 h off a day",
+                                        "rotation": "Supply one day in three"}),
+            "Hours supplied per week": sh["hours supplied per week"].round(0).astype(int),
+            "Locating theft (AUC)": sh["P1 AUC unmetered"].round(3),
+            "Error in total stolen (%)": sh["P1 total err %"].round(1),
+            "Cable faults detected": sh["faults detected"],
+            "False alarms": sh["false alarms"]}), hide_index=True, width="stretch")
+    if pp_path.exists():
+        pp = pd.read_csv(pp_path)
+        st.markdown("**Prepaid token sales** (40 feeder-weeks, about 12,000 prepaid meters each, "
+                    "90 days of vending records)")
+        cols = {"case": "Sales data", "P1 AUC unmetered": "Locating theft (AUC)",
+                "P1 total err %": "Error in total stolen (%)",
+                "bypassers in top 100": "Top 100 meters that really bypass",
+                "bypassers among all meters": "Share of all meters that bypass"}
+        t = pp[[c for c in cols if c in pp]].rename(columns=cols)
+        for c in ["Top 100 meters that really bypass", "Share of all meters that bypass"]:
+            if c in t:
+                t[c] = t[c].map(lambda v: "" if pd.isna(v) else f"{100 * v:.0f}%")
+        st.dataframe(t.round(3), hide_index=True, width="stretch")
+
 # --- 4. How it works ------------------------------------------------------------------
 with tab_how:
     st.markdown("""
@@ -500,6 +605,14 @@ caught 28 of 30 faults with no false alarms in 30 clean weeks.
 meter (zero or missing readings) and left out, so outages are not mistaken for theft or
 faults. With very little supply (for example 24 hours a week), use a month or more of data:
 fault detection in particular needs energised hours before and after a fault starts.
+
+**Prepaid customers.** Most customers buy prepaid tokens, so the vending system holds every
+purchase (meter, date, kWh) and the customer database says which transformer each meter is on.
+The app adds up purchases per transformer area, averaging the last 30 days because people buy
+tokens when they have money, not when they use power. It then ranks individual meters: a meter
+whose buying dropped, or is far below similar meters on the same transformer, in an area where
+the physics says energy is going missing, comes first. Meters listed under the wrong
+transformer blur the picture; the app still works with 10-20% of them wrong.
 
 **Honest limits.** All results so far come from simulation calibrated to published Freetown
 data. Fault location is to a section of the feeder (typically 8 of 32 buses), not one exact

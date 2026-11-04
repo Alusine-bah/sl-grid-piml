@@ -10,17 +10,22 @@ import pandas as pd
 from slgrid.baselines import combined_rules, energy_audit, metered_mask
 from slgrid.dataset import DatasetConfig, generate
 from slgrid.physics_model import PhysicsConfig, PhysicsInformedLocator
+from slgrid.prepaid import VendingConfig, rank_meters, simulate_vending, tokens_to_billing
 from slgrid.studies import placement, rebill, remeter
 
 
 def simulate_case(theft_level: float, n_meters: int, strategy: str, dropout: float,
                   fault: bool, n_days: int, seed: int, billing: str = "daily",
-                  billing_noise: float = 0.03, shedding: str = "none") -> dict:
+                  billing_noise: float = 0.03, shedding: str = "none",
+                  mapping_error: float = 0.05) -> dict:
     """Simulate one feeder period and return it in the standard format (with truth).
 
     billing: "daily" (one value per day per bus) or "period" (one total per bus, as with
     monthly bills or prepaid token sales). billing_noise: relative error of each value.
     shedding: load-shedding pattern (see loads.SHEDDING_PATTERNS).
+    billing="prepaid": simulate 90 days of prepaid vending records for every customer, with
+    `mapping_error` of meters listed under the wrong transformer; sales per area come from
+    the last 30 days of purchases. The records are kept in d["vending"].
     """
     cfg = DatasetConfig(n_scenarios=1, n_days=n_days, ntl_levels=(theft_level,),
                         fault_probability=1.0 if fault else 0.0, dropout=dropout, seed=seed,
@@ -29,9 +34,31 @@ def simulate_case(theft_level: float, n_meters: int, strategy: str, dropout: flo
         d = dict(np.load(generate(cfg, tmp, name="case", progress=False)))
     buses = placement(d, n_meters, strategy, seed=seed)
     d = remeter(d, buses, dropout=dropout, seed=seed + 1)
-    if billing != "daily" or abs(billing_noise - 0.03) > 1e-9:
+    if billing == "prepaid":
+        cust, tok = simulate_vending(d, 0, VendingConfig(mapping_error=mapping_error, seed=seed + 3))
+        d["billing"] = tokens_to_billing(cust, tok, d["bus_names"], n_days)[None]
+        d["vending"] = {"customers": cust, "tokens": tok}
+    elif billing != "daily" or abs(billing_noise - 0.03) > 1e-9:
         d = rebill(d, billing, billing_noise, seed=seed + 2)
     return d
+
+
+def meter_list(d: dict, res: pd.DataFrame) -> pd.DataFrame | None:
+    """Prepaid meters ranked for inspection, or None without vending records.
+
+    Each meter's shortfall in buying is weighted by the physics-informed estimate of the
+    stolen share in its transformer area."""
+    if "vending" not in d:
+        return None
+    v = d["vending"]
+    n_days = d["head"].shape[1] // 24
+    share = pd.Series(res.share_physics.values, index=res.bus.values)
+    out = rank_meters(v["customers"], v["tokens"], n_days, share)
+    if "is_bypass" in v["customers"]:
+        out = out.merge(v["customers"][["meter", "is_bypass", "is_vacant", "true_bus"]],
+                        on="meter", how="left")
+    out.insert(0, "rank", range(1, len(out) + 1))
+    return out
 
 
 def locate(d: dict, power_factor: float = 0.90, tech_loss: float = 0.03) -> pd.DataFrame:

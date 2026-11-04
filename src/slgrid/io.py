@@ -21,6 +21,18 @@ A utility provides five CSV files for one 11 kV feeder:
                     bus for the whole period (no `day` column), as with monthly bills or
                     prepaid token sales.
 
+Prepaid utilities can give vending records instead of billing.csv:
+
+  customers.csv     meter, bus [, kind]
+                    Which transformer area (bus) each prepaid meter is listed under.
+                    Optional `kind` (e.g. residential, commercial): meters are compared
+                    with others of the same kind.
+  tokens.csv        meter, day, kwh
+                    Every token purchase. `day` is a date, or a day number counted like
+                    head.csv (0 = first day of head.csv; earlier history has negative days).
+                    Give a month or more of history before the period if possible: sales
+                    are averaged over the last 30 days, which evens out when people buy.
+
 The period is whole days. Hours with no supply (load shedding) may be left out of head.csv.
 
 These are converted to the arrays the models use (see docs/data_format.md), with a
@@ -38,13 +50,16 @@ REQUIRED = {
     "meters": ["hour", "bus", "p_mw", "q_mvar", "v_pu"],
     "billing": ["bus", "mwh"],          # "day" is optional
 }
+PREPAID = {"customers": ["meter", "bus"], "tokens": ["meter", "day", "kwh"]}
+TOKEN_LOOKBACK = 30   # days of token sales averaged to estimate sales in the period
 
 
 class FeederDataError(ValueError):
     """Raised with a message a utility engineer can act on."""
 
 
-def _to_index(col: pd.Series, unit: str, t0: pd.Timestamp | None = None) -> pd.Series:
+def _to_index(col: pd.Series, unit: str, t0: pd.Timestamp | None = None,
+              allow_negative: bool = False) -> pd.Series:
     """Hour/day numbers counted from the start of the first day.
 
     Integers are used as they are (0 = first hour or day). Timestamps and dates are counted
@@ -53,7 +68,7 @@ def _to_index(col: pd.Series, unit: str, t0: pd.Timestamp | None = None) -> pd.S
     period are simply left out of the file.
     """
     if pd.api.types.is_numeric_dtype(col):
-        if (col < 0).any():
+        if (col < 0).any() and not allow_negative:
             raise FeederDataError(f"The '{unit}' column has negative numbers; count from 0.")
         return col.astype(int)
     t = pd.to_datetime(col, errors="coerce")
@@ -70,8 +85,15 @@ def frames_to_standard(frames: dict[str, pd.DataFrame]) -> tuple[dict, dict]:
     Returns (d, names) where `names` maps internal bus names (bus_0, bus_1, ...) back to
     the utility's own bus identifiers.
     """
-    for key, cols in REQUIRED.items():
-        if key not in frames:
+    prepaid = frames.get("billing") is None and all(frames.get(k) is not None for k in PREPAID)
+    need = {k: v for k, v in REQUIRED.items() if not (prepaid and k == "billing")}
+    if prepaid:
+        need.update(PREPAID)
+    for key, cols in need.items():
+        if frames.get(key) is None:
+            if key == "billing":
+                raise FeederDataError("Missing file: billing.csv (or, for prepaid customers, "
+                                      "customers.csv and tokens.csv)")
             raise FeederDataError(f"Missing file: {key}.csv")
         df = frames[key]
         df.columns = [str(c).strip().lower() for c in df.columns]
@@ -118,9 +140,13 @@ def frames_to_standard(frames: dict[str, pd.DataFrame]) -> tuple[dict, dict]:
     head = head.sort_values("hour").drop_duplicates("hour")
     last_hour = int(head["hour"].max())
 
-    bill = frames["billing"].copy()
-    bill["bus"] = bill["bus"].astype(str).str.strip()
-    daily = "day" in bill.columns and bill["day"].nunique() > 1
+    if prepaid:
+        bill = pd.DataFrame(columns=["bus", "mwh"])
+        daily = False
+    else:
+        bill = frames["billing"].copy()
+        bill["bus"] = bill["bus"].astype(str).str.strip()
+        daily = "day" in bill.columns and bill["day"].nunique() > 1
     if daily:
         bill["day"] = _to_index(bill["day"], "day", t0)
         n_d = int(bill["day"].max()) + 1
@@ -150,14 +176,27 @@ def frames_to_standard(frames: dict[str, pd.DataFrame]) -> tuple[dict, dict]:
     unknown = sorted(set(bill["bus"]) - set(load_buses))
     if unknown:
         raise FeederDataError(f"billing.csv lists bus(es) not in lines.csv: {', '.join(unknown[:5])}")
-    if daily:
+    vending = None
+    if prepaid:
+        from slgrid.prepaid import tokens_to_billing
+        cust, tok = _read_vending(frames, internal, t0)
+        if (tok["day"] >= n_d).any():
+            raise FeederDataError(f"tokens.csv has purchases after the last day of head.csv "
+                                  f"(day {n_d - 1}). Cut it to end with the same day.")
+        if not ((tok["day"] >= 0) & (tok["day"] < n_d)).any():
+            raise FeederDataError("tokens.csv has no purchases during the period covered by head.csv.")
+        sold = tokens_to_billing(cust, tok, [internal[b] for b in load_buses], n_d, TOKEN_LOOKBACK)
+        billing = pd.DataFrame(sold, columns=load_buses)
+        vending = {"customers": cust, "tokens": tok}
+    elif daily:
         billing = (bill.pivot_table(index="day", columns="bus", values="mwh", aggfunc="sum")
                    .reindex(index=range(n_d), columns=load_buses).fillna(0.0))
     else:
         billing = bill.groupby("bus")["mwh"].sum().reindex(load_buses).fillna(0.0).to_frame().T
     if (billing.sum(axis=0) <= 0).any():
         zero = list(billing.columns[billing.sum(axis=0) <= 0][:5])
-        raise FeederDataError(f"billing.csv has no billed energy for bus(es): {', '.join(zero)}. "
+        src = "customers.csv/tokens.csv have" if prepaid else "billing.csv has"
+        raise FeederDataError(f"{src} no billed energy for bus(es): {', '.join(zero)}. "
                               "Every load bus needs some billing.")
 
     met = frames["meters"].copy()
@@ -191,7 +230,30 @@ def frames_to_standard(frames: dict[str, pd.DataFrame]) -> tuple[dict, dict]:
         "meter_v": mpivot("v_pu")[None],
         "billing": billing.values[None].astype(float),
     }
+    if vending is not None:
+        d["vending"] = vending          # prepaid customer list and purchases, internal bus names
     return d, names
+
+
+def _read_vending(frames: dict, internal: dict, t0) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """customers.csv and tokens.csv with internal bus names and day numbers (0 = first day)."""
+    cust = frames["customers"].copy()
+    cust["meter"] = cust["meter"].astype(str).str.strip()
+    cust["bus"] = cust["bus"].astype(str).str.strip().map(internal)
+    if cust["bus"].isna().all():
+        raise FeederDataError("None of the buses in customers.csv appear in lines.csv.")
+    cust = cust.dropna(subset=["bus"]).drop_duplicates("meter", keep="last")
+    if "kind" not in cust.columns:
+        cust["kind"] = "customer"
+    tok = frames["tokens"].copy()
+    tok["meter"] = tok["meter"].astype(str).str.strip()
+    if not pd.api.types.is_numeric_dtype(tok["day"]) and t0 is None:
+        raise FeederDataError("tokens.csv uses dates, so head.csv must use timestamps too. "
+                              "Or give day numbers in tokens.csv (0 = first day of head.csv).")
+    tok["day"] = _to_index(tok["day"], "day", t0, allow_negative=True)
+    tok["kwh"] = pd.to_numeric(tok["kwh"], errors="coerce")
+    tok = tok.dropna(subset=["kwh"])
+    return cust[["meter", "bus", "kind"]].reset_index(drop=True), tok[["meter", "day", "kwh"]]
 
 
 def standard_to_frames(d: dict, s: int = 0) -> dict[str, pd.DataFrame]:
@@ -224,5 +286,13 @@ def standard_to_frames(d: dict, s: int = 0) -> dict[str, pd.DataFrame]:
     else:
         billing = pd.DataFrame([{"day": day, "bus": short(b), "mwh": round(float(d["billing"][s, day, j]), 5)}
                                 for day in range(n_d) for j, b in enumerate(buses)])
-    return {"lines": lines, "transformers": transformers, "head": head, "meters": meters,
-            "billing": billing}
+    out = {"lines": lines, "transformers": transformers, "head": head, "meters": meters,
+           "billing": billing}
+    if "vending" in d:          # prepaid: vending records replace billing.csv
+        v = d["vending"]
+        out.pop("billing")
+        out["customers"] = pd.DataFrame({"meter": v["customers"]["meter"],
+                                         "bus": [short(b) for b in v["customers"]["bus"]],
+                                         "kind": v["customers"].get("kind", "customer")})
+        out["tokens"] = v["tokens"][["meter", "day", "kwh"]].reset_index(drop=True)
+    return out

@@ -50,15 +50,17 @@ data can replace the simulator later without changing the models.
 - **Simulate a feeder:** choose the theft level, number and placement of transformer meters,
   missing readings, a cable fault and the number of days. The app simulates the feeder hour by
   hour, then locates the losses without being told where they are, and shows how close it got.
-- **Analyse your own data:** upload five CSV files describing one real feeder (line sections,
-  transformer kVA, substation meter, transformer meters, billing). Example files are in
+- **Analyse your own data:** upload CSV files describing one real feeder (line sections,
+  transformer kVA, substation meter, transformer meters, and billing or prepaid vending records). Example files are in
   `data/example_feeder/` and can be downloaded from the app.
 - Both modes give a **feeder map** coloured by suspected theft, a ranked **inspection list**
   (downloadable), an **inspection plan** (how much stolen energy the top N areas cover), the
   **revenue at stake** (in US dollars or 14 other currencies, with live exchange rates), and a
   comparison of methods.
-- Billing can be daily, or one total per transformer area for the period (monthly bills or
-  prepaid token sales).
+- Billing can be daily, or one total per transformer area for the period (monthly bills), or
+  **prepaid vending records**: the customer list (meter → transformer) and every token
+  purchase. The app then works out sales per transformer area itself and also ranks
+  **individual prepaid meters** for inspection. Example files are in `data/example_prepaid/`.
 - A **load-shedding** setting simulates daily outages or the one-day-in-three rotation;
   uploaded data may simply leave outage hours out.
 - A **cable-fault alert** gives the start hour, leak size and likely section of a new fault,
@@ -81,6 +83,7 @@ python scripts\run_studies.py
 python scripts\run_billing_study.py
 python scripts\run_fault_study.py
 python scripts\run_shedding_study.py
+python scripts\run_prepaid_study.py
 ```
 
 ## Grounded in Sierra Leone data
@@ -146,6 +149,12 @@ On 25 test scenarios (full log, including a corrected earlier claim, in [`docs/r
    (about 26 hours a week), theft is still located at 0.91-0.94 AUC and the total stolen
    estimated within 4%. Under heavy rationing, cable faults are mostly missed in a single
    week, so a month or more of data is advised.
+7. **Uses prepaid vending records directly and points to individual meters.** From the
+   customer list and every token purchase, it works out sales per transformer area (30-day
+   average) and ranks prepaid meters. Of the top 100 meters, 70% really bypass, against 21%
+   of all meters and 31% when ranking by low buying alone. With 20% of meters linked to the
+   wrong transformer, area localisation falls from 0.93 to 0.87 AUC, so cleaning the
+   customer database is worthwhile.
 
 **How it works:** for each feeder, it finds the theft pattern that best explains the
 substation meter, a few transformer meters and the billing records, while obeying the

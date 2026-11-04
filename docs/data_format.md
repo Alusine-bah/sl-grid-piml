@@ -18,6 +18,13 @@ as EDSA would need to provide for one 11 kV feeder, and how it maps to the array
 Nothing in this list needs customer smart meters. Missing readings are allowed and are
 stored as NaN.
 
+Prepaid customers: instead of energy billed per transformer area, the utility can give its
+vending records: a customer list (`meter`, `bus`, optional `kind`) linking each prepaid meter
+to its transformer, and every token purchase (`meter`, `day`, `kwh`). Sales per area are the
+average daily purchases over the last 30 days times the length of the period. A month or
+more of purchase history before the period is recommended. The same records are used to rank
+individual meters for inspection (see `src/slgrid/prepaid.py`).
+
 Load shedding: hours when the feeder was switched off can be left out of the substation
 file or given as zero. The models treat them as dead hours (no flow, no readings) and use
 only energised hours. Hour numbers and timestamps are counted from the start (midnight) of

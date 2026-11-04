@@ -239,6 +239,17 @@ checked against full AC power flow.</p>
     <p>A leaking cable draws real power but no reactive power, unlike stolen household load. A
     detector built on this caught 28 of 30 faults with no false alarms in 30 clean weeks, timed
     each start to the hour, and narrowed the location to a section of about 8 of 32 transformers.</p></div>
+  <div class="finding"><h3>Works through load shedding</h3>
+    <p>With daily 4–8 hour outages, or supply only one day in three (about 26 hours a week), theft
+    is still located at 0.91–0.94 AUC and the total stolen estimated within 4%. Under heavy
+    rationing, a month or more of data is advised.</p></div>
+  <div class="finding"><h3>Prepaid vending records point to individual meters</h3>
+    <p>From the customer list and every token purchase, the app ranks prepaid meters. Of the top
+    100, 70% really bypass their meter, against 21% of all meters and 31% when ranking by low
+    buying alone: the feeder physics tells crews where a low buyer is worth a visit.</p></div>
+  <div class="finding warn"><h3>Clean the customer-to-transformer mapping</h3>
+    <p>With 20% of prepaid meters linked to the wrong transformer, area localisation falls from
+    0.93 to 0.87 AUC and the meter list from 70% to 60% correct.</p></div>
   <div class="finding warn"><h3>Limitation: simulation only</h3>
     <p>All results come from simulation calibrated to published Freetown data, not from field
     measurements. A test on one real feeder is the next step.</p></div>
@@ -250,11 +261,13 @@ changing the method. For one 11 kV feeder, it needs:</p>
 <ul class="plain">
   <li>Hourly P, Q and voltage at the substation 11 kV breaker</li>
   <li>Hourly readings from any transformer check meters (gaps are fine)</li>
-  <li>Energy sold per transformer area: daily, or one total for the month (prepaid vending or billing)</li>
+  <li>Energy sold per transformer area (daily, or one total for the month), or for prepaid customers
+  the vending records: every token purchase and the customer-to-transformer list</li>
   <li>The feeder layout, line types and lengths, and transformer kVA ratings</li>
 </ul>
-<p>The <a href="https://sl-grid-piml.streamlit.app">interactive app</a> accepts exactly these as five CSV
-files and returns a feeder map, a ranked inspection list and an estimate of revenue lost.</p>
+<p>The <a href="https://sl-grid-piml.streamlit.app">interactive app</a> accepts exactly these as CSV
+files and returns a feeder map, a ranked inspection list, a list of prepaid meters to check
+and an estimate of revenue lost.</p>
 <p class="note">No customer smart meters are needed. A first real-feeder test would show whether the
 simulated results hold, and would replace the simulated weeks with real ones.</p>
 

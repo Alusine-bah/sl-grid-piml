@@ -249,3 +249,62 @@ fault. Reproduce with `python scripts/run_shedding_study.py`.
   zero. Timestamps are counted from midnight of the first day, so outages at the start of
   the period do not shift the timeline.
 
+## Phase 10: prepaid token sales and individual meters
+
+Most EDSA customers are prepaid. The vending system holds every token purchase (meter, date,
+kWh), and the customer database links each meter to a transformer. Both can now be used
+directly (`src/slgrid/prepaid.py`; `customers.csv` + `tokens.csv` in the app).
+
+**Simulation.** For each feeder-week, 90 days of vending records for about 12,000 customers:
+- Customer sizes vary widely (log-normal); 3% of accounts are vacant and buy nothing.
+- Each customer buys tokens on their own rhythm (every 2-14 days on average, irregular gaps),
+  each purchase covering roughly their use until the next one.
+- At a theft hotspot, half the stolen energy is taken by illegal connections with no account,
+  and half by account holders who bypass their meter for 50-100% of their use. Half of these
+  were already bypassing when the records begin; the rest start during them.
+- The customer database can list some meters under the wrong transformer (mostly a
+  neighbouring one).
+
+**Data.** 40 feeder-weeks (seed 404). Reproduce with `python scripts/run_prepaid_study.py`.
+
+| Sales data | Sales error per area (median) | P1 AUC unmetered | P1 total error | B1c AUC unmetered | B1c total error |
+|---|---|---|---|---|---|
+| Daily billing (reference) | 0.8% | 0.930 | 1.3% | 0.919 | 3.5% |
+| Token sales in the 7 days | 4.4% | 0.931 | 10.7% | 0.914 | 11.2% |
+| 30-day token average | 1.7% | 0.926 | 5.0% | 0.910 | 6.5% |
+| 30-day average, 5% of meters mis-mapped | 3.6% | 0.914 | 5.2% | 0.889 | 6.5% |
+| 30-day average, 10% mis-mapped | 6.0% | 0.904 | 5.3% | 0.874 | 6.5% |
+| 30-day average, 20% mis-mapped | 11.2% | 0.869 | 5.3% | 0.834 | 6.5% |
+
+**Ranking individual meters** (30-day average). A meter's shortfall is how far its last 30
+days of buying fall below the higher of what it bought before and what similar meters on the
+same transformer buy now. The shortfall is weighted by the physics-informed estimate of the
+stolen share in the meter's area.
+
+| | Correct mapping | 5% mis-mapped | 10% | 20% |
+|---|---|---|---|---|
+| Meters that really bypass, among the top 100 | **70%** | 67% | 65% | 60% |
+| Same, ranking by buying alone (no area weight) | 31% | 31% | 30% | 31% |
+| Meter AUC (with area weight) | 0.84 | 0.83 | 0.82 | 0.80 |
+| Share of all meters that bypass | 21% | 21% | 21% | 21% |
+
+### What this shows
+- **Vending records work as billing**, if sales are averaged over about a month. Using only
+  the purchases made during the analysed week still locates theft (AUC 0.93), but the total
+  stolen is 11% off, because a week of token sales is far from a week of use.
+- The 30-day average estimates the total stolen within 5%, not 1.3% as with true daily
+  billing. Customers who began bypassing during the month still show part of their earlier
+  buying, so sales look a little higher than real paid use. A small error in sales becomes a
+  larger relative error in theft, because theft is only part of the energy.
+- **Physics plus vending records find individual meters.** Of the 100 meters ranked first,
+  70% really bypass, against 21% of all meters (3.4 times better than random). Ranking by
+  buying alone gets only 31%, because many honest customers simply use little. The feeder
+  physics tells the crew which areas to trust a low buyer in.
+- **The customer database matters.** With 20% of meters listed under the wrong transformer,
+  area localisation drops from 0.93 to 0.87 AUC and the meter list from 70% to 60% hits.
+  Cleaning the customer-to-transformer mapping is worth doing alongside meter audits. The
+  physics-informed model stays ahead of the rule-based method at every level.
+- **Limits.** Illegal connections with no account cannot appear on the meter list; they are
+  found by inspecting the top-ranked areas. Customer behaviour is simulated and must be
+  checked against real vending data.
+
