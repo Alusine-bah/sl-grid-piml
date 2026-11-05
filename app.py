@@ -19,7 +19,8 @@ import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 import streamlit as st  # noqa: E402
 
-from slgrid.app_core import feeder_summary, locate, meter_list, simulate_case, tree_layout  # noqa: E402
+from slgrid.app_core import (feeder_summary, large_customer_list, locate, meter_list,  # noqa: E402
+                             simulate_case, tree_layout)  # noqa: E402
 from slgrid.io import FeederDataError, frames_to_standard, standard_to_frames  # noqa: E402
 from slgrid.loads import SHEDDING_PATTERNS  # noqa: E402
 
@@ -30,6 +31,7 @@ GREY = "#8a959e"
 EXAMPLE_DIR = ROOT / "data" / "example_feeder"
 FILES = ["lines", "transformers", "head", "meters", "billing"]
 PREPAID_FILES = ["customers", "tokens"]
+AMI_FILES = ["ami_customers", "ami_readings"]
 EXAMPLE_PREPAID_DIR = ROOT / "data" / "example_prepaid"
 CURRENCIES = {
     "USD": "US dollar", "SLE": "Sierra Leonean leone", "EUR": "Euro", "GBP": "British pound",
@@ -56,11 +58,11 @@ def usd_rates():
 
 @st.cache_data(show_spinner=False)
 def run_simulation(theft, n_meters, strategy, dropout, fault, days, seed, billing, bill_noise,
-                   shedding, mapping_error):
+                   shedding, mapping_error, ami):
     d = simulate_case(theft, n_meters, strategy, dropout, fault, days, seed, billing, bill_noise,
-                      shedding, mapping_error)
+                      shedding, mapping_error, ami)
     res = locate(d)
-    return d, res, meter_list(d, res)
+    return d, res, meter_list(d, res), large_customer_list(d, res)
 
 
 @st.cache_data(show_spinner=False)
@@ -68,7 +70,7 @@ def run_uploaded(frames_bytes: dict, power_factor: float, tech_loss: float):
     frames = {k: pd.read_csv(io.BytesIO(v)) for k, v in frames_bytes.items()}
     d, names = frames_to_standard(frames)
     res = locate(d, power_factor=power_factor, tech_loss=tech_loss)
-    return d, res, names, meter_list(d, res)
+    return d, res, names, meter_list(d, res), large_customer_list(d, res)
 
 
 def label(bus: str, names: dict | None) -> str:
@@ -210,7 +212,65 @@ def meter_section(d, meters, names, show_truth, key):
                        "prepaid_meter_list.csv", "text/csv", key=f"{key}_mdl")
 
 
-def results_view(d, res, names, show_truth, key, meters=None):
+def large_section(d, large, names, show_truth, key):
+    st.subheader("Large customers on smart meters")
+    st.caption("Each large customer's hourly smart-meter readings are checked for a lasting "
+               "drop in daily energy (beyond normal day-to-day variation) and for a peak demand "
+               "unusually low for its contracted capacity, which is how a meter that records "
+               "only part of the load looks. Customers in transformer areas where the feeder "
+               "physics finds missing energy come first. A drop can also be genuine (a business "
+               "cutting back), so this is a list of meters to test, not of offenders.")
+    c = st.columns(4)
+    c[0].metric("Large customers on smart meters", f"{len(large)}")
+    c[1].metric("With a lasting drop in use", f"{int((large.drop_pct > 0).sum())}")
+    c[2].metric("Peak below half the typical share of contract",
+                f"{int((large.use_of_contract_pct < 0.5 * large.use_of_contract_pct.median()).sum())}")
+    if show_truth and "tamper" in large:
+        k = int(large.tamper.sum())
+        if k:
+            c[3].metric(f"Tampered meters in the top {k}", f"{int(large.head(k).tamper.sum())} of {k}")
+        else:
+            c[3].metric("Tampered meters", "none in this case")
+    t = pd.DataFrame({
+        "Rank": large["rank"], "Meter": large.meter, "Bus": [label(b, names) for b in large.bus],
+        "Type": large["type"] if "type" in large else "",
+        "Contract (kVA)": large.contract_kva.round(0).astype(int),
+        "Daily use, last 7 days (kWh)": large.daily_kwh_recent.round(0),
+        "Lasting drop": np.where(large.drop_pct > 0, large.drop_pct.astype(int).astype(str) + "%", ""),
+        "Drop from day": large.drop_day.map(lambda v: "" if pd.isna(v) else f"{int(v)}"),
+        "Peak / contract": large.use_of_contract_pct.astype(int).astype(str) + "%",
+        "Area stolen share": (100 * large.area_stolen_share).round(0).astype(int).astype(str) + "%",
+    })
+    if show_truth and "tamper" in large:
+        t["Truth"] = np.where(large.tamper, large.tamper_kind.fillna(""), "honest")
+        t["Tampering since day"] = large.onset_hour.map(
+            lambda v: "" if pd.isna(v) else ("before the records" if v < -28 * 24 else f"{int(v // 24)}"))
+    st.dataframe(t, hide_index=True, width="stretch", height=320, key=f"{key}_ltbl")
+    st.download_button("Download large-customer list (CSV)", t.to_csv(index=False).encode(),
+                       "large_customer_list.csv", "text/csv", key=f"{key}_ldl")
+    # daily energy of the top five, to see the drops
+    a = d["ami"]
+    r = a["readings"]
+    T = d["head"].shape[1]
+    keep = r["hours"] < T
+    p, hrs = r["p_kw"][keep], r["hours"][keep]
+    top = list(large.meter.head(5))
+    cols = [list(a["customers"].meter).index(m) for m in top]
+    day = np.floor(hrs / 24).astype(int)
+    on = ~(np.nan_to_num(p) <= 0).all(axis=1)
+    df = pd.DataFrame(np.nan_to_num(p[:, cols]), columns=top)
+    df["day"], df["on"] = day, on
+    g = df.groupby("day")
+    daily = g[top].sum().div(g["on"].sum().clip(lower=1), axis=0) * 24
+    daily = daily[g["on"].sum() >= 6].reset_index().melt("day", var_name="meter", value_name="kWh")
+    st.altair_chart(alt.Chart(daily).mark_line(point=True).encode(
+        x=alt.X("day:Q", title="Day (0 = first day of the period; earlier = smart-meter history)"),
+        y=alt.Y("kWh:Q", title="Daily energy recorded (kWh)"),
+        color=alt.Color("meter:N", title="Top 5 meters")).properties(height=260),
+        width="stretch", key=f"{key}_lchart")
+
+
+def results_view(d, res, names, show_truth, key, meters=None, large=None):
     s = feeder_summary(d, res)
     c = st.columns(4)
     sup = (f"{s['days']} days" if s["hours_on"] == s["hours"]
@@ -251,6 +311,8 @@ def results_view(d, res, names, show_truth, key, meters=None):
                        "inspection_list.csv", "text/csv", key=f"{key}_dl")
     if meters is not None:
         meter_section(d, meters, names, show_truth, key)
+    if large is not None:
+        large_section(d, large, names, show_truth, key)
 
     st.subheader("Inspection plan and money at stake")
     c1, c2 = st.columns([2, 1])
@@ -385,15 +447,20 @@ with tab_sim:
                                      "load-sharing programme for domestic feeders (JICA report). "
                                      "Demand surges for two hours when supply returns.")
         fault = c3.checkbox("Include a cable fault", value=False)
+        ami = c3.checkbox("Large customers on smart meters (AMI)", value=False,
+                          help="The 36 large customers at the three commercial transformer "
+                               "areas have smart meters with 28 days of hourly history. Some "
+                               "tamper with their meters where there is theft.")
         seed = c3.number_input("Random seed (changes the neighbourhoods and theft spots)",
                                0, 9999, 7)
         go = st.form_submit_button("Run simulation and locate losses", type="primary")
     if go or "sim_done" in st.session_state:
         st.session_state["sim_done"] = True
         with st.spinner("Simulating the feeder and locating losses..."):
-            d, res, meters = run_simulation(theft, n_meters, strategy, dropout, fault, days,
-                                            int(seed), billing, bill_noise, shedding, mapping)
-        results_view(d, res, None, show_truth=True, key="sim", meters=meters)
+            d, res, meters, large = run_simulation(theft, n_meters, strategy, dropout, fault, days,
+                                                   int(seed), billing, bill_noise, shedding,
+                                                   mapping, ami)
+        results_view(d, res, None, show_truth=True, key="sim", meters=meters, large=large)
         with st.expander("Download this simulated feeder as utility CSV files"):
             st.write("These are the same files a utility would upload in the next tab "
                      "(with prepaid sales: customers.csv and tokens.csv instead of billing.csv). "
@@ -420,10 +487,13 @@ with tab_own:
 | `meters.csv` | hour, bus, p_mw, q_mvar, v_pu | Any transformer check meters. Gaps are fine; can be empty (header only). |
 | **Either** `billing.csv` | day, bus, mwh — or just bus, mwh | Energy sold per transformer area: either per day, or one total per bus for the whole period (monthly bills). |
 | **or** `customers.csv` | meter, bus, (kind) | Prepaid customer list: the transformer area each meter is listed under. Optional `kind` (residential, commercial…). |
+| *optional* `ami_customers.csv` | meter, bus, contract_kva, (type) | Large customers on smart meters: transformer area and contracted capacity from the customer register. |
+| *optional* `ami_readings.csv` | meter, hour, p_kw, q_kvar, v_pu | Their hourly smart-meter readings, numbered like `head.csv` (history before the period has negative hours) or timestamps. |
 | **and** `tokens.csv` | meter, day, kwh | Every token purchase from the vending system. `day` is a date, or a day number (0 = first day of `head.csv`, earlier history negative). A month or more of history before the period is best. |
 """)
     ex_sets = {"billing": (EXAMPLE_DIR, FILES),
-               "prepaid": (EXAMPLE_PREPAID_DIR, FILES[:4] + PREPAID_FILES)}
+               "prepaid": (EXAMPLE_PREPAID_DIR, FILES[:4] + PREPAID_FILES
+                           + [k for k in AMI_FILES if (EXAMPLE_PREPAID_DIR / f"{k}.csv").exists()])}
     c1, c2 = st.columns(2)
     for col, (kind, (folder, names_)) in zip((c1, c2), ex_sets.items()):
         paths = {k: folder / f"{k}.csv" for k in names_}
@@ -434,12 +504,12 @@ with tab_own:
                     z.write(p, f"{k}.csv")
             col.download_button(
                 "Download example files (.zip)" if kind == "billing"
-                else "Download prepaid example files (.zip)",
+                else "Download prepaid + smart-meter example files (.zip)",
                 buf.getvalue(), f"example_feeder{'_prepaid' if kind == 'prepaid' else ''}.zip",
                 "application/zip", key=f"ex_zip_{kind}")
 
     use_example = st.radio("Data", ["Upload my files", "Example: billing per area",
-                                    "Example: prepaid token sales"], horizontal=True)
+                                    "Example: prepaid sales + smart meters"], horizontal=True)
     uploads = {}
     if use_example == "Upload my files":
         cols = st.columns(4)
@@ -453,6 +523,12 @@ with tab_own:
             f = c.file_uploader(lab, type="csv", key=f"up_{k}")
             if f is not None:
                 uploads[k] = f.getvalue()
+        with st.expander("Optional: large customers on smart meters (AMI)"):
+            cols = st.columns(2)
+            for c, k in zip(cols, AMI_FILES):
+                f = c.file_uploader(f"{k}.csv", type="csv", key=f"up_{k}")
+                if f is not None:
+                    uploads[k] = f.getvalue()
     else:
         folder, names_ = ex_sets["billing" if "billing" in use_example else "prepaid"]
         uploads = {k: (folder / f"{k}.csv").read_bytes() for k in names_}
@@ -467,14 +543,16 @@ with tab_own:
             uploads = {k: v for k, v in uploads.items() if k not in PREPAID_FILES}
         try:
             with st.spinner("Checking the files and locating losses..."):
-                d, res, names, meters = run_uploaded(uploads, pf, tl)
+                d, res, names, meters, large = run_uploaded(uploads, pf, tl)
             nb = d["billing"].shape[1]
             sales = ("prepaid token sales" if "vending" in d
                      else "daily billing" if nb > 1 else "one billing total per bus")
+            if "ami" in d:
+                sales += f", {len(d['ami']['customers'])} large customers on smart meters"
             st.success(f"Read a feeder with {len(res)} load buses, {int(res.metered.sum())} "
                        f"transformer meters and {d['head'].shape[1] // 24} days of data "
                        f"({sales}).")
-            results_view(d, res, names, show_truth=False, key="own", meters=meters)
+            results_view(d, res, names, show_truth=False, key="own", meters=meters, large=large)
         except FeederDataError as e:
             st.error(f"There is a problem with the files: {e}")
     else:
@@ -574,6 +652,20 @@ with tab_study:
                 t[c] = t[c].map(lambda v: "" if pd.isna(v) else f"{100 * v:.0f}%")
         st.dataframe(t.round(3), hide_index=True, width="stretch")
 
+    am_path = ROOT / "results" / "ami.csv"
+    if am_path.exists():
+        am = pd.read_csv(am_path)
+        st.markdown("**Large customers on smart meters** (40 feeder-weeks, 36 large customers "
+                    "each, 28 days of hourly history)")
+        st.dataframe(pd.DataFrame({
+            "Data": am["case"].str.capitalize(),
+            "Locating theft (AUC)": am["P1 AUC unmetered"].round(3),
+            "Error in stolen energy at large-customer areas (%)":
+                am["large-customer areas: theft error % (median)"].round(1),
+            "Tampered meters in top k (%)": am["hits in top k (k = number of tamperers) %"].round(0),
+            "Same, readings alone (%)": am["same, smart-meter data alone %"].round(0)}),
+            hide_index=True, width="stretch")
+
 # --- 4. How it works ------------------------------------------------------------------
 with tab_how:
     st.markdown("""
@@ -613,6 +705,12 @@ tokens when they have money, not when they use power. It then ranks individual m
 whose buying dropped, or is far below similar meters on the same transformer, in an area where
 the physics says energy is going missing, comes first. Meters listed under the wrong
 transformer blur the picture; the app still works with 10-20% of them wrong.
+
+**Large customers on smart meters.** Hourly smart-meter readings give the exact sales of
+the areas where every customer has one, and extra voltage points along the feeder. Each
+large customer is checked for a lasting drop in daily use and for a peak far below its
+contracted capacity, which is how a meter that records only part of the load looks. A check
+meter on each large-customer transformer then makes the energy balance of those areas exact.
 
 **Honest limits.** All results so far come from simulation calibrated to published Freetown
 data. Fault location is to a section of the feeder (typically 8 of 32 buses), not one exact

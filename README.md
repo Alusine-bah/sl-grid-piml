@@ -60,7 +60,10 @@ data can replace the simulator later without changing the models.
 - Billing can be daily, or one total per transformer area for the period (monthly bills), or
   **prepaid vending records**: the customer list (meter → transformer) and every token
   purchase. The app then works out sales per transformer area itself and also ranks
-  **individual prepaid meters** for inspection. Example files are in `data/example_prepaid/`.
+  **individual prepaid meters** for inspection.
+- Optional **smart-meter (AMI) readings of large customers**: the model uses their hourly
+  sales and voltages, and ranks the large customers for tamper inspection with a chart of
+  their daily use. Example files (prepaid + smart meters) are in `data/example_prepaid/`.
 - A **load-shedding** setting simulates daily outages or the one-day-in-three rotation;
   uploaded data may simply leave outage hours out.
 - A **cable-fault alert** gives the start hour, leak size and likely section of a new fault,
@@ -84,6 +87,7 @@ python scripts\run_billing_study.py
 python scripts\run_fault_study.py
 python scripts\run_shedding_study.py
 python scripts\run_prepaid_study.py
+python scripts\run_ami_study.py
 ```
 
 ## Grounded in Sierra Leone data
@@ -155,6 +159,11 @@ On 25 test scenarios (full log, including a corrected earlier claim, in [`docs/r
    of all meters and 31% when ranking by low buying alone. With 20% of meters linked to the
    wrong transformer, area localisation falls from 0.93 to 0.87 AUC, so cleaning the
    customer database is worthwhile.
+8. **Finds tampered smart meters of large customers.** From hourly smart-meter readings, a
+   lasting drop in use or a peak far below the contracted capacity, weighted by the feeder
+   model, puts 85% of tampered large-customer meters at the top of the list. Adding one check
+   meter on each large-customer transformer pins the stolen energy in those areas to within
+   1% (from about 20%).
 
 **How it works:** for each feeder, it finds the theft pattern that best explains the
 substation meter, a few transformer meters and the billing records, while obeying the

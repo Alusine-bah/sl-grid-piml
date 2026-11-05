@@ -308,3 +308,56 @@ stolen share in the meter's area.
   found by inspecting the top-ranked areas. Customer behaviour is simulated and must be
   checked against real vending data.
 
+## Phase 11: large customers on smart meters (AMI)
+
+Large commercial and industrial customers are the first to get smart meters with hourly
+readings. The model can now use them (`src/slgrid/ami.py`; `ami_customers.csv` +
+`ami_readings.csv` in the app).
+
+**Simulation.** The three commercial transformer areas get 12 large customers each (offices
+and shops, hotels, telecom and water pumping, workshops), with 28 days of hourly history:
+- day-to-day variation of 15% and quieter Sundays;
+- 15% of honest customers change their use for good during the history (a business cutting
+  back or expanding), which a detector must not mistake for theft;
+- contracted capacities in the register are generous and uneven (typically 1.5 times the
+  real peak).
+
+Where the feeder simulation put theft at a commercial area, up to 60% of its large customers
+tamper. Either one phase is bypassed (the meter records two thirds of the load), or the
+current transformer is shunted (it records 10-50%). 60% of tamperers start during the
+history; the rest were already tampering when it begins.
+
+**Data.** 40 feeder-weeks (seed 505); 35 have tampering large customers. Reproduce with
+`python scripts/run_ami_study.py`.
+
+| | No smart-meter data | Smart meters | Smart meters + check meter on each large-customer transformer |
+|---|---|---|---|
+| Theft at unmetered transformers (AUC) | 0.945 | 0.944 | 0.948 |
+| Error in total stolen | 1.3% | 1.2% | 1.2% |
+| Error in stolen energy at the large-customer areas (median) | 23.5% | 20.1% | **0.7%** |
+| Tampered meters in the top k (k = number of tamperers) | 85% | 85% | 85% |
+| Same, smart-meter readings alone (no feeder physics) | 80% | 80% | 80% |
+| Meter AUC (alone: 0.879) | 0.888 | 0.888 | 0.890 |
+
+Tampered meters found in the top k: 88% of those that started during the history, and 81% of
+those already tampering when it began (found from their low peak for the contracted capacity
+and from the feeder physics).
+
+### What this shows
+- **Smart-meter analytics find tampered large meters.** A lasting drop in daily energy, or a
+  peak far below the contracted capacity, puts 80% of tampered meters at the top of the list
+  on its own. Weighting by the feeder model's estimate for each area raises this to 85%.
+- **Honest note:** on their own, the smart meters of 36 large customers do not improve where
+  theft is found on the rest of the feeder (AUC 0.944 vs 0.945). Three extra voltage points
+  and the exact hourly sales of three areas are too little to change the picture for 29
+  other areas.
+- **The cheap win is a check meter on each large-customer transformer.** With every customer
+  behind a transformer on a smart meter, a meter on the transformer itself closes the energy
+  balance exactly. The stolen energy in those areas is then known to within 1% instead of
+  about 20%: three transformer meters turn the smart-meter programme into an exact audit of
+  its areas.
+- **Limits.** A careful tamperer who keeps the same drop from the first day of the records and
+  is sized well within their contract is hard to find from readings alone; the transformer
+  check meter catches them in the area total. Customer behaviour is simulated and must be
+  checked against real smart-meter data.
+

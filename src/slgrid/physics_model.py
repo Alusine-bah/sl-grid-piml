@@ -105,6 +105,12 @@ class PhysicsInformedLocator:
         self.buses = [str(b) for b in d["bus_names"]]
         self.meters = [str(m) for m in d["meter_names"]]
         self.m_idx = [self.buses.index(m) for m in self.meters]
+        # Smart meters of large customers (AMI) add voltage measurements at their areas.
+        self.ami_idx = []
+        if "ami_v" in d:
+            has = np.isfinite(d["ami_v"]).any(axis=(0, 1))
+            self.ami_idx = [j for j in np.flatnonzero(has) if j not in self.m_idx]
+        self.v_idx = self.m_idx + self.ami_idx            # all buses with a voltage reading
         A = path_matrix(d["line_from"], d["line_to"], self.buses)     # [B, L]
         self.ZR = (A * d["line_r_ohm"]) @ A.T / V_KV ** 2             # pu per MW
         self.ZX = (A * d["line_x_ohm"]) @ A.T / V_KV ** 2
@@ -132,19 +138,25 @@ class PhysicsInformedLocator:
             shape = head[: n_d * 24].reshape(n_d, 24)
             tot = shape.sum(axis=1, keepdims=True)
             shape = np.divide(shape, tot, out=np.zeros_like(shape), where=tot > 0)
-            return (shape[:, :, None] * bill[:, None, :]).reshape(n_d * 24, -1)   # [T, B] MW
-        shape = head / max(head.sum(), 1e-12)
-        return shape[:, None] * bill.sum(axis=0)[None, :]
+            b = (shape[:, :, None] * bill[:, None, :]).reshape(n_d * 24, -1)   # [T, B] MW
+        else:
+            shape = head / max(head.sum(), 1e-12)
+            b = shape[:, None] * bill.sum(axis=0)[None, :]
+        if "ami_p" in self.d:
+            # areas whose customers all have smart meters: exact hourly sales
+            a = self.d["ami_p"][s][: b.shape[0]]
+            cols = np.isfinite(a).any(axis=0)
+            b[:, cols] = np.nan_to_num(a[:, cols])
+        return b
 
     def _ac_corrections(self, P, Q, v_head, on=None):
         """Losses and LinDistFlow voltage errors from a full AC power flow.
         Hours with the feeder switched off (on = False) are skipped: no flow, no losses."""
         T = P.shape[0]
         loss_p, loss_q = np.zeros(T), np.zeros(T)
-        v_corr = np.zeros((T, len(self.meters)))
-        load_bus = self.net.load["bus"].values
+        v_corr = np.zeros((T, len(self.v_idx)))
         bus_names = self.net.bus["name"].values
-        m_rows = [int(np.flatnonzero(bus_names == m)[0]) for m in self.meters]
+        m_rows = [int(np.flatnonzero(bus_names == self.buses[j])[0]) for j in self.v_idx]
         for t in range(T):
             if on is not None and not on[t]:
                 continue
@@ -155,7 +167,7 @@ class PhysicsInformedLocator:
             loss_p[t] = self.net.res_line["pl_mw"].sum()
             loss_q[t] = self.net.res_line["ql_mvar"].sum()
             v_ac = self.net.res_bus["vm_pu"].values[m_rows]
-            drop_lin = self.ZR[self.m_idx] @ P[t] + self.ZX[self.m_idx] @ Q[t]
+            drop_lin = self.ZR[self.v_idx] @ P[t] + self.ZX[self.v_idx] @ Q[t]
             v_corr[t] = (v_head[t] - v_ac) - drop_lin
         return loss_p, loss_q, v_corr
 
@@ -164,9 +176,12 @@ class PhysicsInformedLocator:
         cfg, d = self.cfg, self.d
         b = self._hourly_billed(s)                       # [T, B]
         T, B = b.shape
-        M = len(self.meters)
+        M = len(self.v_idx)                              # voltage readings (meters + AMI)
+        Mm = len(self.meters)                            # transformer meters (P, Q, V)
         head_p, head_q, v_head = d["head"][s, :, 0], d["head"][s, :, 1], d["head"][s, :, 2]
         vm, mp, mq = d["meter_v"][s], d["meter_p"][s], d["meter_q"][s]
+        if self.ami_idx:
+            vm = np.concatenate([vm.reshape(T, Mm), d["ami_v"][s][:, self.ami_idx]], axis=1)
         # Hours the feeder was switched off (load shedding) carry no information:
         # loads, losses, cable charging and any leak are all zero then.
         from slgrid.faults import energised_hours
@@ -234,7 +249,7 @@ class PhysicsInformedLocator:
             A = np.zeros((T, n)); A[:, i_th] = self.tan * b; A[:, i_q0] = on
             add(A[on], (head_q - self.tan * b.sum(1) - loss_q)[on], grp[on], cfg.sd_head_q)
             # 3. voltage drop to each meter
-            for k, m in enumerate(self.m_idx):
+            for k, m in enumerate(self.v_idx):
                 ok = ~np.isnan(vm[:, k])
                 A = np.zeros((ok.sum(), n))
                 A[:, i_th] = K[m] * b[ok]

@@ -1,0 +1,37 @@
+meter,bus,contract_kva,type
+L0001,23,145.0,telecom/water pumping
+L0002,23,50.0,workshop/factory
+L0003,23,175.0,office/shop
+L0004,23,145.0,office/shop
+L0005,23,130.0,hotel/restaurant
+L0006,23,285.0,office/shop
+L0007,23,125.0,telecom/water pumping
+L0008,23,295.0,office/shop
+L0009,23,115.0,hotel/restaurant
+L0010,23,130.0,workshop/factory
+L0011,23,40.0,telecom/water pumping
+L0012,23,40.0,workshop/factory
+L0013,24,165.0,office/shop
+L0014,24,35.0,telecom/water pumping
+L0015,24,105.0,office/shop
+L0016,24,85.0,office/shop
+L0017,24,70.0,telecom/water pumping
+L0018,24,300.0,workshop/factory
+L0019,24,120.0,hotel/restaurant
+L0020,24,185.0,hotel/restaurant
+L0021,24,25.0,workshop/factory
+L0022,24,35.0,hotel/restaurant
+L0023,24,35.0,telecom/water pumping
+L0024,24,90.0,office/shop
+L0025,29,135.0,office/shop
+L0026,29,35.0,hotel/restaurant
+L0027,29,45.0,workshop/factory
+L0028,29,25.0,hotel/restaurant
+L0029,29,195.0,workshop/factory
+L0030,29,220.0,hotel/restaurant
+L0031,29,15.0,workshop/factory
+L0032,29,55.0,hotel/restaurant
+L0033,29,80.0,hotel/restaurant
+L0034,29,55.0,office/shop
+L0035,29,140.0,telecom/water pumping
+L0036,29,30.0,hotel/restaurant

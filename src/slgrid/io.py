@@ -33,6 +33,17 @@ Prepaid utilities can give vending records instead of billing.csv:
                     Give a month or more of history before the period if possible: sales
                     are averaged over the last 30 days, which evens out when people buy.
 
+Large customers on smart meters (AMI), optional, in addition to the files above:
+
+  ami_customers.csv meter, bus, contract_kva [, type]
+                    Each large customer's smart meter, its transformer area, and the
+                    contracted capacity from the customer register.
+  ami_readings.csv  meter, hour, p_kw, q_kvar, v_pu
+                    Hourly smart-meter readings, numbered like head.csv (or timestamps).
+                    Weeks of history before the period help find tampered meters.
+                    Transformer areas whose customers are all on smart meters should list
+                    them all: the model then uses their hourly sales and voltages.
+
 The period is whole days. Hours with no supply (load shedding) may be left out of head.csv.
 
 These are converted to the arrays the models use (see docs/data_format.md), with a
@@ -51,6 +62,8 @@ REQUIRED = {
     "billing": ["bus", "mwh"],          # "day" is optional
 }
 PREPAID = {"customers": ["meter", "bus"], "tokens": ["meter", "day", "kwh"]}
+AMI = {"ami_customers": ["meter", "bus", "contract_kva"],
+       "ami_readings": ["meter", "hour", "p_kw", "q_kvar", "v_pu"]}
 TOKEN_LOOKBACK = 30   # days of token sales averaged to estimate sales in the period
 
 
@@ -232,7 +245,45 @@ def frames_to_standard(frames: dict[str, pd.DataFrame]) -> tuple[dict, dict]:
     }
     if vending is not None:
         d["vending"] = vending          # prepaid customer list and purchases, internal bus names
+    if all(frames.get(k) is not None for k in AMI):
+        d = _add_ami(d, frames, internal, t0, n_t)
     return d, names
+
+
+def _add_ami(d: dict, frames: dict, internal: dict, t0, n_t: int) -> dict:
+    """Large customers' smart-meter files -> d["ami"] and the model inputs ami_p / ami_v."""
+    from slgrid.ami import ami_inputs
+    for key, cols in AMI.items():
+        df = frames[key]
+        df.columns = [str(c).strip().lower() for c in df.columns]
+        missing = [c for c in cols if c not in df.columns]
+        if missing:
+            raise FeederDataError(f"{key}.csv is missing column(s): {', '.join(missing)}")
+    cust = frames["ami_customers"].copy()
+    cust["meter"] = cust["meter"].astype(str).str.strip()
+    cust["bus"] = cust["bus"].astype(str).str.strip().map(internal)
+    if cust["bus"].isna().any():
+        raise FeederDataError("ami_customers.csv lists bus(es) not in lines.csv.")
+    cust = cust.drop_duplicates("meter", keep="last").reset_index(drop=True)
+    if "type" not in cust.columns:
+        cust["type"] = "large customer"
+    rd = frames["ami_readings"].copy()
+    rd["meter"] = rd["meter"].astype(str).str.strip()
+    rd = rd[rd["meter"].isin(cust["meter"])]
+    if rd.empty:
+        raise FeederDataError("ami_readings.csv has no readings for the meters in ami_customers.csv.")
+    if not pd.api.types.is_numeric_dtype(rd["hour"]) and t0 is None:
+        raise FeederDataError("ami_readings.csv uses timestamps, so head.csv must use timestamps too.")
+    rd["hour"] = _to_index(rd["hour"], "hour", t0, allow_negative=True)
+    rd = rd[rd["hour"] < n_t]
+    hours = np.arange(int(min(rd["hour"].min(), 0)), n_t)
+    piv = lambda col: (rd.pivot_table(index="hour", columns="meter", values=col, aggfunc="mean")  # noqa: E731
+                       .reindex(index=hours, columns=cust["meter"]).values.astype(float))
+    readings = {"hours": hours, "p_kw": piv("p_kw"), "q_kvar": piv("q_kvar")}
+    readings["v_pu"] = piv("v_pu")[hours >= 0]
+    d = ami_inputs(d, cust, readings)
+    d["ami"] = {"customers": cust, "readings": readings}
+    return d
 
 
 def _read_vending(frames: dict, internal: dict, t0) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -295,4 +346,22 @@ def standard_to_frames(d: dict, s: int = 0) -> dict[str, pd.DataFrame]:
                                          "bus": [short(b) for b in v["customers"]["bus"]],
                                          "kind": v["customers"].get("kind", "customer")})
         out["tokens"] = v["tokens"][["meter", "day", "kwh"]].reset_index(drop=True)
+    if "ami" in d:              # large customers on smart meters
+        a = d["ami"]
+        c = a["customers"]
+        out["ami_customers"] = pd.DataFrame({"meter": c["meter"],
+                                             "bus": [short(b) for b in c["bus"]],
+                                             "contract_kva": c["contract_kva"],
+                                             "type": c.get("type", "large customer")})
+        r = a["readings"]
+        hrs = r["hours"]
+        n = len(c)
+        vfull = np.full((len(hrs), n), np.nan)
+        vfull[hrs >= 0] = r["v_pu"]
+        df = pd.DataFrame({"meter": np.tile(c["meter"].values, len(hrs)),
+                           "hour": np.repeat(hrs, n),
+                           "p_kw": np.round(r["p_kw"].ravel(), 2),
+                           "q_kvar": np.round(r["q_kvar"].ravel(), 2),
+                           "v_pu": np.round(vfull.ravel(), 4)})
+        out["ami_readings"] = df.dropna(subset=["p_kw"]).reset_index(drop=True)
     return out

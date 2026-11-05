@@ -25,6 +25,13 @@ average daily purchases over the last 30 days times the length of the period. A 
 more of purchase history before the period is recommended. The same records are used to rank
 individual meters for inspection (see `src/slgrid/prepaid.py`).
 
+Large customers on smart meters (optional): `ami_customers.csv` (`meter`, `bus`,
+`contract_kva`, optional `type`) and hourly `ami_readings.csv` (`meter`, `hour`, `p_kw`,
+`q_kvar`, `v_pu`), with weeks of history before the period if possible. In areas where all
+customers are on smart meters, the model uses their exact hourly sales (`ami_p`) and their
+voltages as extra measurement points (`ami_v`). The readings are also used to rank the large
+customers for tamper inspection (see `src/slgrid/ami.py`).
+
 Load shedding: hours when the feeder was switched off can be left out of the substation
 file or given as zero. The models treat them as dead hours (no flow, no readings) and use
 only energised hours. Hour numbers and timestamps are counted from the start (midnight) of

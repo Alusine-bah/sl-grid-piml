@@ -7,6 +7,7 @@ from collections import defaultdict
 import numpy as np
 import pandas as pd
 
+from slgrid.ami import AMIConfig, ami_inputs, rank_large_customers, simulate_ami
 from slgrid.baselines import combined_rules, energy_audit, metered_mask
 from slgrid.dataset import DatasetConfig, generate
 from slgrid.physics_model import PhysicsConfig, PhysicsInformedLocator
@@ -17,7 +18,8 @@ from slgrid.studies import placement, rebill, remeter
 def simulate_case(theft_level: float, n_meters: int, strategy: str, dropout: float,
                   fault: bool, n_days: int, seed: int, billing: str = "daily",
                   billing_noise: float = 0.03, shedding: str = "none",
-                  mapping_error: float = 0.05) -> dict:
+                  mapping_error: float = 0.05, ami: bool = False,
+                  vending_history: int = 90) -> dict:
     """Simulate one feeder period and return it in the standard format (with truth).
 
     billing: "daily" (one value per day per bus) or "period" (one total per bus, as with
@@ -26,6 +28,8 @@ def simulate_case(theft_level: float, n_meters: int, strategy: str, dropout: flo
     billing="prepaid": simulate 90 days of prepaid vending records for every customer, with
     `mapping_error` of meters listed under the wrong transformer; sales per area come from
     the last 30 days of purchases. The records are kept in d["vending"].
+    ami: the large customers at commercial transformer areas have smart meters with 28 days
+    of hourly history, and some tamper where there is theft. Kept in d["ami"].
     """
     cfg = DatasetConfig(n_scenarios=1, n_days=n_days, ntl_levels=(theft_level,),
                         fault_probability=1.0 if fault else 0.0, dropout=dropout, seed=seed,
@@ -34,13 +38,41 @@ def simulate_case(theft_level: float, n_meters: int, strategy: str, dropout: flo
         d = dict(np.load(generate(cfg, tmp, name="case", progress=False)))
     buses = placement(d, n_meters, strategy, seed=seed)
     d = remeter(d, buses, dropout=dropout, seed=seed + 1)
+    if ami:
+        d, lc, rd = simulate_ami(d, 0, AMIConfig(seed=seed + 4))
+        d = ami_inputs(d, lc, rd)
+        d["ami"] = {"customers": lc, "readings": rd}
     if billing == "prepaid":
-        cust, tok = simulate_vending(d, 0, VendingConfig(mapping_error=mapping_error, seed=seed + 3))
-        d["billing"] = tokens_to_billing(cust, tok, d["bus_names"], n_days)[None]
+        cust, tok = simulate_vending(d, 0, VendingConfig(history_days=vending_history,
+                                                          mapping_error=mapping_error, seed=seed + 3))
+        if ami:     # large customers are on smart meters, not on the prepaid vending system
+            lc_buses = set(d["ami"]["customers"]["bus"])
+            keep = ~cust["true_bus"].isin(lc_buses)
+            tok = tok[tok.meter.isin(cust.meter[keep])].reset_index(drop=True)
+            cust = cust[keep].reset_index(drop=True)
+        sold = tokens_to_billing(cust, tok, d["bus_names"], n_days)[None]
+        if ami:
+            j = np.isfinite(d["ami_p"][0]).any(axis=0)
+            sold[0, :, j] = np.nansum(d["ami_p"][0][:, j], axis=0)[:, None]
+        d["billing"] = sold
         d["vending"] = {"customers": cust, "tokens": tok}
     elif billing != "daily" or abs(billing_noise - 0.03) > 1e-9:
         d = rebill(d, billing, billing_noise, seed=seed + 2)
     return d
+
+
+def large_customer_list(d: dict, res: pd.DataFrame) -> pd.DataFrame | None:
+    """Large customers on smart meters ranked for inspection, or None without AMI data."""
+    if "ami" not in d:
+        return None
+    a = d["ami"]
+    share = pd.Series(res.share_physics.values, index=res.bus.values)
+    out = rank_large_customers(a["customers"], a["readings"], d["head"].shape[1], share)
+    if "tamper" in a["customers"]:
+        out = out.merge(a["customers"][["meter", "tamper", "tamper_kind", "onset_hour"]],
+                        on="meter", how="left")
+    out.insert(0, "rank", range(1, len(out) + 1))
+    return out
 
 
 def meter_list(d: dict, res: pd.DataFrame) -> pd.DataFrame | None:
