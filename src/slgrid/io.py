@@ -42,7 +42,9 @@ Large customers on smart meters (AMI), optional, in addition to the files above:
                     Hourly smart-meter readings, numbered like head.csv (or timestamps).
                     Weeks of history before the period help find tampered meters.
                     Transformer areas whose customers are all on smart meters should list
-                    them all: the model then uses their hourly sales and voltages.
+                    them all: the model then uses their hourly sales and voltages. With
+                    billing.csv, large customers' bills are assumed to be in it; with
+                    prepaid files, their recorded energy is added to the sales.
 
 The period is whole days. Hours with no supply (load shedding) may be left out of head.csv.
 
@@ -247,6 +249,13 @@ def frames_to_standard(frames: dict[str, pd.DataFrame]) -> tuple[dict, dict]:
         d["vending"] = vending          # prepaid customer list and purchases, internal bus names
     if all(frames.get(k) is not None for k in AMI):
         d = _add_ami(d, frames, internal, t0, n_t)
+        if prepaid:
+            # large customers are not on the prepaid vending system: add what their smart
+            # meters recorded in the period to the sales of their transformer areas
+            # (with billing.csv, their bills are assumed to be in it already)
+            sold = np.nansum(d["ami_p"][0], axis=0)                     # MWh per bus
+            d["billing"] = d["billing"].copy()
+            d["billing"][0] += sold[None, :] / d["billing"].shape[1]
     return d, names
 
 
@@ -365,3 +374,29 @@ def standard_to_frames(d: dict, s: int = 0) -> dict[str, pd.DataFrame]:
                            "v_pu": np.round(vfull.ravel(), 4)})
         out["ami_readings"] = df.dropna(subset=["p_kw"]).reset_index(drop=True)
     return out
+
+
+def split_district_zip(data: bytes) -> dict[str, dict[str, bytes]]:
+    """Read a zip of several feeders: one folder per feeder, each holding that feeder's CSV
+    files (the same files as for one feeder). Returns {feeder name: {file key: bytes}}.
+    A zip with the CSV files at the top level counts as one feeder."""
+    import io as _io
+    import zipfile
+    out: dict[str, dict[str, bytes]] = {}
+    try:
+        z = zipfile.ZipFile(_io.BytesIO(data))
+    except zipfile.BadZipFile as e:
+        raise FeederDataError("The file is not a valid .zip archive.") from e
+    for info in z.infolist():
+        if info.is_dir() or not info.filename.lower().endswith(".csv"):
+            continue
+        parts = [p for p in info.filename.replace("\\", "/").split("/") if p]
+        if any(p.startswith("__MACOSX") or p.startswith(".") for p in parts):
+            continue
+        key = parts[-1][:-4].lower()
+        feeder = parts[-2] if len(parts) >= 2 else "Feeder"
+        out.setdefault(feeder, {})[key] = z.read(info)
+    if not out:
+        raise FeederDataError("No CSV files found in the zip.")
+    return dict(sorted(out.items()))
+

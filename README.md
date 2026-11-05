@@ -61,6 +61,9 @@ data can replace the simulator later without changing the models.
   **prepaid vending records**: the customer list (meter → transformer) and every token
   purchase. The app then works out sales per transformer area itself and also ranks
   **individual prepaid meters** for inspection.
+- **Compare feeders**: rank several feeders (simulated, or uploaded as one .zip with a
+  folder per feeder) by estimated theft and revenue lost, and plan where a limited number
+  of inspection crews should go across all of them.
 - Optional **smart-meter (AMI) readings of large customers**: the model uses their hourly
   sales and voltages, and ranks the large customers for tamper inspection with a chart of
   their daily use. Example files (prepaid + smart meters) are in `data/example_prepaid/`.
@@ -88,6 +91,7 @@ python scripts\run_fault_study.py
 python scripts\run_shedding_study.py
 python scripts\run_prepaid_study.py
 python scripts\run_ami_study.py
+python scripts\run_district_study.py
 ```
 
 ## Grounded in Sierra Leone data
@@ -164,6 +168,11 @@ On 25 test scenarios (full log, including a corrected earlier claim, in [`docs/r
    model, puts 85% of tampered large-customer meters at the top of the list. Adding one check
    meter on each large-customer transformer pins the stolen energy in those areas to within
    1% (from about 20%).
+9. **Plans inspection crews across a whole district.** With crews for 10% of a district's
+   transformer areas, sending them to the highest-theft areas across all feeders reaches
+   47% of the stolen energy, against 40% with equal crews per feeder and 30% when crews
+   concentrate on the feeders with the most unbilled energy. Ranking whole feeders works
+   equally well with unbilled energy in this simulation (rank correlation 0.97 for both).
 
 **How it works:** for each feeder, it finds the theft pattern that best explains the
 substation meter, a few transformer meters and the billing records, while obeying the

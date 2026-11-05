@@ -19,9 +19,10 @@ import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 import streamlit as st  # noqa: E402
 
-from slgrid.app_core import (feeder_summary, large_customer_list, locate, meter_list,  # noqa: E402
+from slgrid.app_core import (district_params, district_plan, district_table,  # noqa: E402
+                             feeder_summary, large_customer_list, locate, meter_list,
                              simulate_case, tree_layout)  # noqa: E402
-from slgrid.io import FeederDataError, frames_to_standard, standard_to_frames  # noqa: E402
+from slgrid.io import FeederDataError, frames_to_standard, split_district_zip, standard_to_frames  # noqa: E402
 from slgrid.loads import SHEDDING_PATTERNS  # noqa: E402
 
 st.set_page_config(page_title="Feeder Loss Locator", page_icon="⚡", layout="wide")
@@ -264,7 +265,8 @@ def large_section(d, large, names, show_truth, key):
     daily = g[top].sum().div(g["on"].sum().clip(lower=1), axis=0) * 24
     daily = daily[g["on"].sum() >= 6].reset_index().melt("day", var_name="meter", value_name="kWh")
     st.altair_chart(alt.Chart(daily).mark_line(point=True).encode(
-        x=alt.X("day:Q", title="Day (0 = first day of the period; earlier = smart-meter history)"),
+        x=alt.X("day:Q", title="Day (0 = first day of the period; earlier = smart-meter history)",
+                scale=alt.Scale(domain=[int(daily.day.min()), int(daily.day.max())], nice=False)),
         y=alt.Y("kWh:Q", title="Daily energy recorded (kWh)"),
         color=alt.Color("meter:N", title="Top 5 meters")).properties(height=260),
         width="stretch", key=f"{key}_lchart")
@@ -353,7 +355,9 @@ def results_view(d, res, names, show_truth, key, meters=None, large=None):
     plan = plan.melt("inspected", var_name="series", value_name="pct")
     c1.altair_chart(alt.Chart(plan).mark_line(point=True).encode(
         x=alt.X("inspected:Q", title="Transformer areas inspected, in ranked order"),
-        y=alt.Y("pct:Q", title="Share of stolen energy covered (%)", scale=alt.Scale(domain=[0, 100])),
+        y=alt.Y("pct:Q", title="Share of stolen energy covered (%)",
+                scale=alt.Scale(domain=[-3, 103], nice=False),
+                axis=alt.Axis(values=[0, 20, 40, 60, 80, 100])),
         color=alt.Color("series:N", title="", scale=alt.Scale(
             domain=["Estimated", "Actually found (simulation)", "Random order"],
             range=[ORANGE, "#1e6b52", GREY]))).properties(height=260),
@@ -400,14 +404,133 @@ def results_view(d, res, names, show_truth, key, meters=None, large=None):
             width="stretch", key=f"{key}_ts")
 
 
+def money_inputs(col, key):
+    """Tariff and currency inputs; returns (tariff in US$/kWh, currency code, rate per US$)."""
+    tariff = col.number_input("Revenue per kWh sold (US$)", 0.0, 2.0, 0.20, 0.01, key=f"{key}_tariff",
+                              help="Example value. Enter your own average tariff in US dollars.")
+    cur = col.selectbox("Show amounts in", list(CURRENCIES), key=f"{key}_cur",
+                        format_func=lambda c: f"{c} - {CURRENCIES[c]}")
+    rate = 1.0
+    if cur != "USD":
+        rates, updated = usd_rates()
+        live = rates.get(cur) if rates else None
+        rate = col.number_input(f"Exchange rate: 1 US$ = ? {cur}", min_value=0.0,
+                                value=float(live) if live else None, format="%.4f",
+                                key=f"{key}_rate_{cur}")
+        if not rate:
+            cur, rate = "USD", 1.0
+    return tariff, cur, rate
+
+
+def district_view(feeders, names, show_truth, key, extras=None):
+    """Ranking of several feeders, a district-wide crew plan, and each feeder in detail.
+
+    feeders: {name: (d, res)}; names: {name: bus-name map or None}."""
+    tab = district_table(feeders)
+    c1, c2 = st.columns([3, 1])
+    tariff, cur, rate = money_inputs(c2, key)
+    money = lambda mwh: mwh * 1000 * tariff * rate  # noqa: E731
+    sym = "US$" if cur == "USD" else cur
+    m = c1.columns(4)
+    m[0].metric("Feeders", len(tab))
+    m[1].metric("Energy in per month", f"{tab.energy_in_month.sum():,.0f} MWh")
+    m[2].metric("Estimated stolen per month", f"{tab.stolen_month.sum():,.0f} MWh",
+                f"{100 * tab.stolen_month.sum() / tab.energy_in_month.sum():.0f}% of energy in",
+                delta_color="off")
+    m[3].metric("Revenue lost per month", f"{sym} {money(tab.stolen_month.sum()):,.0f}")
+
+    c1.subheader("Feeders ranked by estimated theft")
+    c1.caption("Estimated stolen energy and revenue per month, from the physics-informed "
+               "locator on each feeder. Unbilled energy is shown for comparison: it also "
+               "contains technical losses and cable-fault leakage, so it can rank feeders "
+               "wrongly.")
+    t = pd.DataFrame({
+        "Rank": tab["rank"], "Feeder": tab.feeder,
+        "Stolen per month (MWh)": tab.stolen_month.round(0).astype(int),
+        f"Revenue lost per month ({sym})": tab.stolen_month.map(lambda v: f"{money(v):,.0f}"),
+        "Stolen share of energy in": tab.stolen_pct.round(0).astype(int).astype(str) + "%",
+        "Unbilled energy": tab.unbilled_pct.round(0).astype(int).astype(str) + "%",
+        "Theft in top 5 areas": tab.top5_share.round(0).astype(int).astype(str) + "%",
+        "Transformer meters": tab.meters.astype(str) + " of " + tab.areas.astype(str),
+        "Supply": np.where(tab.hours_on < tab.hours,
+                           (100 * tab.hours_on / tab.hours).round(0).astype(int).astype(str) + "% of hours",
+                           "all day"),
+        "Cable fault": np.where(tab.fault, tab.fault_kw.round(0).astype(int).astype(str) + " kW leak", ""),
+    })
+    if show_truth and "true_stolen_month" in tab:
+        t["True stolen per month (MWh)"] = tab.true_stolen_month.round(0).astype(int)
+        t["True rank"] = tab.true_rank
+        t["True fault"] = np.where(tab.true_fault, "yes", "")
+    st.dataframe(t, hide_index=True, width="stretch", key=f"{key}_rank")
+    bars = pd.DataFrame({"Feeder": tab.feeder, "MWh": tab.stolen_month, "series": "Estimated"})
+    if show_truth and "true_stolen_month" in tab:
+        bars = pd.concat([bars, pd.DataFrame({"Feeder": tab.feeder, "MWh": tab.true_stolen_month,
+                                              "series": "True (simulation)"})])
+    st.altair_chart(alt.Chart(bars).mark_bar().encode(
+        x=alt.X("Feeder:N", sort=list(tab.feeder), title=None),
+        xOffset="series:N",
+        y=alt.Y("MWh:Q", title="Stolen energy per month (MWh)"),
+        color=alt.Color("series:N", title="", scale=alt.Scale(
+            domain=["Estimated", "True (simulation)"], range=[ORANGE, "#1e6b52"])),
+        tooltip=["Feeder", "series", alt.Tooltip("MWh:Q", format=",.0f")]).properties(height=260),
+        width="stretch", key=f"{key}_bars")
+
+    st.subheader("Where to send a limited number of crews")
+    n_total = int(tab.areas.sum())
+    n = st.slider("Transformer areas your crews can inspect", 1, n_total,
+                  max(1, round(0.1 * n_total)), key=f"{key}_budget",
+                  help="The plan picks the areas with the highest estimated theft across all "
+                       "feeders, instead of giving every feeder the same number of crews.")
+    plan = district_plan(feeders, n)
+    share = 100 * plan.stolen_month.sum() / max(plan.attrs["total_stolen_month"], 1e-12)
+    m = st.columns(3)
+    m[0].metric("Estimated theft in these areas", f"{plan.stolen_month.sum():,.0f} MWh/month",
+                f"{share:.0f}% of the district's", delta_color="off")
+    m[1].metric("Revenue at stake", f"{sym} {money(plan.stolen_month.sum()):,.0f} per month")
+    if show_truth and "true_stolen_month" in plan:
+        got = 100 * plan.true_stolen_month.sum() / plan.attrs["true_total_month"]
+        per = n // len(tab)
+        eq = 0.0
+        for name, (d, res) in feeders.items():
+            pm = 30.0 / (d["head"].shape[1] / 24)
+            eq += res.head(per).true_stolen_mwh.sum() * pm
+        eq = 100 * eq / plan.attrs["true_total_month"]
+        m[2].metric("True theft reached (simulation)", f"{got:.0f}%",
+                    f"equal crews per feeder: {eq:.0f}%" if per else "", delta_color="off")
+    by_f = plan.feeder.value_counts().reindex(tab.feeder).fillna(0).astype(int)
+    st.caption("Areas per feeder in this plan: " + ", ".join(f"{f} {k}" for f, k in by_f.items()))
+    pt = pd.DataFrame({
+        "Order": plan.order, "Feeder": plan.feeder,
+        "Bus": [label(b, names.get(f)) for f, b in zip(plan.feeder, plan.bus)],
+        "Estimated stolen (MWh/month)": plan.stolen_month.round(1),
+        f"Revenue (per month, {sym})": plan.stolen_month.map(lambda v: f"{money(v):,.0f}"),
+        "Stolen share": (100 * plan.share).round(0).astype(int).astype(str) + "%"})
+    if show_truth and "true_hotspot" in plan:
+        pt["True theft (MWh/month)"] = plan.true_stolen_month.round(1)
+    st.dataframe(pt, hide_index=True, width="stretch", height=320, key=f"{key}_plan")
+    c = st.columns(2)
+    c[0].download_button("Download feeder ranking (CSV)", t.to_csv(index=False).encode(),
+                         "feeder_ranking.csv", "text/csv", key=f"{key}_dl1")
+    c[1].download_button("Download crew plan (CSV)", pt.to_csv(index=False).encode(),
+                         "crew_plan.csv", "text/csv", key=f"{key}_dl2")
+
+    st.subheader("One feeder in detail")
+    pick = st.selectbox("Feeder", list(tab.feeder), key=f"{key}_pick")
+    d, res = feeders[pick]
+    ex = (extras or {}).get(pick, (None, None))
+    results_view(d, res, names.get(pick), show_truth, key=f"{key}_{list(feeders).index(pick)}",
+                 meters=ex[0], large=ex[1])
+
+
 # ----------------------------------------------------------------------------- layout
 st.title("⚡ Feeder Loss Locator")
 st.write("Find **where** electricity is being lost on an 11 kV distribution feeder, using the "
          "substation meter, a few transformer meters, billing records and the transformer "
          "register. No customer smart meters and no records of past theft are needed.")
 
-tab_sim, tab_own, tab_study, tab_how = st.tabs(
-    ["Simulate a feeder", "Analyse your own data", "Study results", "How it works"])
+tab_sim, tab_own, tab_dist, tab_study, tab_how = st.tabs(
+    ["Simulate a feeder", "Analyse your own data", "Compare feeders", "Study results",
+     "How it works"])
 
 # --- 1. Simulation ------------------------------------------------------------------
 with tab_sim:
@@ -561,6 +684,81 @@ with tab_own:
             missing.append("billing.csv (or customers.csv + tokens.csv)")
         st.info(f"Waiting for files: {', '.join(missing)}")
 
+with tab_dist:
+    st.write("A utility runs many feeders. Rank them by estimated theft, and plan where a "
+             "limited number of inspection crews should go across all of them.")
+    mode = st.radio("Feeders", ["Simulate a district", "Upload several feeders (.zip)"],
+                    horizontal=True, key="dist_mode")
+    if mode == "Simulate a district":
+        with st.form("dist_form"):
+            c1, c2, c3 = st.columns(3)
+            n_f = c1.slider("Number of feeders", 3, 10, 6)
+            n_days = c2.slider("Days of data", 3, 7, 7)
+            dseed = c3.number_input("Random seed", 0, 10_000, 3, step=1)
+            st.caption("Each simulated feeder gets its own theft level (5-45%), number of "
+                       "transformer meters (0-8), load shedding and, on some, a cable fault.")
+            go = st.form_submit_button("Simulate and rank feeders", type="primary")
+        if go:
+            st.session_state["dist_args"] = (n_f, n_days, int(dseed))
+        if "dist_args" in st.session_state:
+            n_f, n_days, dseed = st.session_state["dist_args"]
+            feeders = {}
+            bar = st.progress(0.0, text="Simulating and analysing feeders...")
+            for i, p in enumerate(district_params(n_f, dseed)):
+                d, res, _, _ = run_simulation(p["theft"], p["n_meters"], "ends", 0.2, p["fault"],
+                                              n_days, p["seed"], "daily", 0.03, p["shedding"],
+                                              0.05, False)
+                feeders[f"Feeder {i + 1}"] = (d, res)
+                bar.progress((i + 1) / n_f, text=f"Analysed feeder {i + 1} of {n_f}")
+            bar.empty()
+            district_view(feeders, {}, show_truth=True, key="dsim")
+            buf = io.BytesIO()
+            with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+                for name, (d, _) in feeders.items():
+                    for k, df in standard_to_frames(d).items():
+                        z.writestr(f"{name.replace(' ', '_')}/{k}.csv", df.to_csv(index=False))
+            st.download_button("Download these feeders as a district .zip (to try the upload)",
+                               buf.getvalue(), "district_example.zip", "application/zip",
+                               key="dsim_zip")
+    else:
+        st.markdown("Upload **one .zip** with **one folder per feeder**. Each folder holds the "
+                    "same CSV files as in *Analyse your own data* (lines, transformers, head, "
+                    "meters, and billing or prepaid customers + tokens; smart-meter files "
+                    "optional). The folder name is used as the feeder's name. To see the layout, "
+                    "simulate a district and download it as a .zip.")
+        up = st.file_uploader("District .zip", type="zip", key="dist_zip")
+        c1, c2 = st.columns(2)
+        pf = c1.slider("Typical power factor of loads", 0.75, 1.0, 0.90, 0.01, key="dist_pf")
+        tl = c2.slider("Expected technical losses on the 11 kV network", 0.0, 0.10, 0.03, 0.01,
+                       format="%.2f", key="dist_tl")
+        if up is not None:
+            try:
+                parts = split_district_zip(up.getvalue())
+            except FeederDataError as e:
+                st.error(str(e))
+                parts = {}
+            feeders, names, extras, problems = {}, {}, {}, []
+            bar = st.progress(0.0, text="Analysing feeders...") if parts else None
+            for i, (name, files) in enumerate(parts.items()):
+                try:
+                    if "billing" in files:
+                        files = {k: v for k, v in files.items() if k not in PREPAID_FILES}
+                    d, res, nm, meters, large = run_uploaded(files, pf, tl)
+                    feeders[name], names[name], extras[name] = (d, res), nm, (meters, large)
+                except FeederDataError as e:
+                    problems.append(f"**{name}**: {e}")
+                except Exception as e:  # noqa: BLE001 - report and carry on with the others
+                    problems.append(f"**{name}**: could not be read ({type(e).__name__}).")
+                bar.progress((i + 1) / len(parts), text=f"Analysed {i + 1} of {len(parts)} feeders")
+            if bar:
+                bar.empty()
+            if problems:
+                st.warning("Some feeders were skipped:\n\n" + "\n\n".join(problems))
+            if feeders:
+                st.success(f"Analysed {len(feeders)} feeder(s).")
+                district_view(feeders, names, show_truth=False, key="dup", extras=extras)
+
+
 # --- 3. Study results ---------------------------------------------------------------
 with tab_study:
     st.write("Results from 100 simulated weeks (25 held back for testing). "
@@ -666,6 +864,22 @@ with tab_study:
             "Same, readings alone (%)": am["same, smart-meter data alone %"].round(0)}),
             hide_index=True, width="stretch")
 
+    di_path = ROOT / "results" / "district.csv"
+    if di_path.exists():
+        di = pd.read_csv(di_path).iloc[0]
+        st.markdown(f"**Crews across a district** ({int(di.districts)} districts of "
+                    f"{int(di['feeders per district'])} feeders; crews for "
+                    f"{int(di['crew budget (areas)'])} transformer areas per district)")
+        st.dataframe(pd.DataFrame({
+            "Where the crews go": ["District-wide, highest estimated theft",
+                                   "Equal crews on every feeder",
+                                   "Feeders with most unbilled energy (usual practice)",
+                                   "Random areas"],
+            "True stolen energy reached (%)": [round(di[c], 1) for c in [
+                "crews: district-wide", "crews: equal per feeder",
+                "crews: worst feeders by unbilled", "crews: random"]]}),
+            hide_index=True, width="stretch")
+
 # --- 4. How it works ------------------------------------------------------------------
 with tab_how:
     st.markdown("""
@@ -711,6 +925,11 @@ the areas where every customer has one, and extra voltage points along the feede
 large customer is checked for a lasting drop in daily use and for a peak far below its
 contracted capacity, which is how a meter that records only part of the load looks. A check
 meter on each large-customer transformer then makes the energy balance of those areas exact.
+
+**Several feeders.** The *Compare feeders* tab runs the same analysis on every feeder of a
+district, ranks the feeders by estimated theft and revenue lost, and plans where a limited
+number of crews should go: the areas with the highest estimated theft across all feeders,
+not the same number on every feeder.
 
 **Honest limits.** All results so far come from simulation calibrated to published Freetown
 data. Fault location is to a section of the feeder (typically 8 of 32 buses), not one exact

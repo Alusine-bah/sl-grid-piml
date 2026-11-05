@@ -202,3 +202,80 @@ def tree_layout(d: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
         else:
             elbows.append(e.to_dict())
     return nodes, pd.DataFrame(elbows)
+
+
+# ----------------------------------------------------------------------------- districts
+def district_params(n_feeders: int, seed: int) -> list[dict]:
+    """Settings for a simulated district: feeders that differ in theft level, number of
+    transformer meters, load shedding and cable faults."""
+    rng = np.random.default_rng(seed)
+    out = []
+    for i in range(n_feeders):
+        out.append({"theft": float(rng.choice([0.05, 0.10, 0.15, 0.25, 0.35, 0.45])),
+                    "n_meters": int(rng.choice([0, 2, 4, 6, 8])),
+                    "shedding": str(rng.choice(["none", "none", "4h", "8h"])),
+                    "fault": bool(rng.random() < 0.3),
+                    "seed": int(seed * 100 + i)})
+    return out
+
+
+def simulate_district(n_feeders: int, n_days: int, seed: int) -> dict:
+    """Simulate a district; returns {feeder name: d}."""
+    return {f"Feeder {i + 1}": simulate_case(p["theft"], p["n_meters"], "ends", 0.2, p["fault"],
+                                             n_days, p["seed"], shedding=p["shedding"])
+            for i, p in enumerate(district_params(n_feeders, seed))}
+
+
+def district_table(feeders: dict) -> pd.DataFrame:
+    """One row per feeder, ranked by estimated stolen energy per month.
+
+    `feeders` maps a feeder name to (d, res) as returned by locate()."""
+    rows = []
+    for name, (d, res) in feeders.items():
+        s = feeder_summary(d, res)
+        pm = 30.0 / s["days"]
+        st = res.stolen_physics_mwh.values
+        top5 = np.sort(st)[::-1][:5].sum() / max(st.sum(), 1e-12)
+        k_half = int(np.searchsorted(np.cumsum(np.sort(st)[::-1]) / max(st.sum(), 1e-12), 0.5) + 1)
+        f = res.attrs.get("fault", {})
+        row = {"feeder": name, "days": s["days"], "hours_on": s["hours_on"], "hours": s["hours"],
+               "energy_in_month": s["head_mwh"] * pm, "unbilled_pct": s["unbilled_pct"],
+               "stolen_month": s["stolen_physics"] * pm,
+               "stolen_pct": 100 * s["stolen_physics"] / max(s["head_mwh"], 1e-12),
+               "top5_share": 100 * top5, "areas_for_half": k_half,
+               "meters": s["n_meters"], "areas": s["n_buses"],
+               "fault": bool(f.get("detected", False)),
+               "fault_kw": float(f.get("leak_kw", 0.0)) if f.get("detected") else 0.0}
+        if "stolen_true" in s:
+            row["true_stolen_month"] = s["stolen_true"] * pm
+            row["true_fault"] = bool(d["is_fault"][0].any())
+        rows.append(row)
+    out = pd.DataFrame(rows).sort_values("stolen_month", ascending=False, ignore_index=True)
+    out.insert(0, "rank", range(1, len(out) + 1))
+    if "true_stolen_month" in out:
+        out["true_rank"] = out.true_stolen_month.rank(ascending=False, method="first").astype(int)
+    return out
+
+
+def district_plan(feeders: dict, n_areas: int) -> pd.DataFrame:
+    """The `n_areas` transformer areas with the highest estimated theft per month across all
+    feeders: where to send a limited number of inspection crews."""
+    parts = []
+    for name, (d, res) in feeders.items():
+        pm = 30.0 / (d["head"].shape[1] / 24)
+        p = pd.DataFrame({"feeder": name, "bus": res.bus.values,
+                          "stolen_month": res.stolen_physics_mwh.values * pm,
+                          "share": res.share_physics.values})
+        if "true_stolen_mwh" in res:
+            p["true_stolen_month"] = res.true_stolen_mwh.values * pm
+            p["true_hotspot"] = res.true_hotspot.values
+        parts.append(p)
+    allp = pd.concat(parts, ignore_index=True).sort_values("stolen_month", ascending=False,
+                                                           ignore_index=True)
+    allp["cum_pct"] = 100 * allp.stolen_month.cumsum() / max(allp.stolen_month.sum(), 1e-12)
+    plan = allp.head(n_areas).copy()
+    plan.insert(0, "order", range(1, len(plan) + 1))
+    plan.attrs["total_stolen_month"] = float(allp.stolen_month.sum())
+    if "true_stolen_month" in allp:
+        plan.attrs["true_total_month"] = float(allp.true_stolen_month.sum())
+    return plan

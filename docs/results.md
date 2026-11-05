@@ -361,3 +361,39 @@ and from the feeder physics).
   check meter catches them in the area total. Customer behaviour is simulated and must be
   checked against real smart-meter data.
 
+## Phase 12: ranking feeders and sharing crews across a district
+
+A utility manages many feeders and has a limited number of inspection crews. The app's
+**Compare feeders** tab ranks several feeders by estimated theft and plans where crews
+should go across all of them (`district_table`, `district_plan` in
+`src/slgrid/app_core.py`). Feeders can be uploaded as one .zip with a folder per feeder.
+
+**Data.** 60 feeder-weeks (seed 606) with theft from 5% to 45% of consumption and a cable
+fault on about 30%, grouped into 10 districts of 6 feeders. Crews can inspect 10% of a
+district's transformer areas (19 of 192). Reproduce with `python scripts/run_district_study.py`.
+
+| Question | Physics-informed | Unbilled energy (usual practice) |
+|---|---|---|
+| Rank correlation of feeders with true theft (Spearman) | 0.97 | 0.97 |
+| Feeder with the most theft ranked first | 9 of 10 districts | 10 of 10 |
+| Error in each feeder's total stolen (median) | 2.3% | (not an estimate of theft) |
+
+| Where the 19 crews go | Share of the district's true stolen energy reached |
+|---|---|
+| **District-wide: the 19 areas with the highest estimated theft** | **46.7%** |
+| Equal crews: the top 3 areas on every feeder (+1 district-wide) | 39.9% |
+| Usual practice: the feeders with most unbilled energy, areas by combined rules | 29.6% |
+| Random areas | 9.9% |
+
+### What this shows
+- **Honest note:** ranking whole feeders does not need the physics model. When feeders are
+  of the same design, unbilled energy already orders them correctly (both 0.97). The
+  physics model adds a reliable estimate of how much each feeder loses (within about 2%),
+  which unbilled energy cannot give because it also holds technical losses and leaks.
+- **Where the method pays off is the crew plan.** Sending crews to the highest-theft areas
+  across the whole district reaches 47% of the stolen energy, against 40% with equal crews
+  per feeder and 30% with the usual approach of concentrating on the worst feeders. That is
+  1.6 times the usual practice for the same number of crews.
+- **Limits.** All simulated feeders share one network design; real feeders differ in length,
+  load and cable type, which would make unbilled energy a weaker guide and the physics
+  estimate more useful. This should be checked on real feeders.

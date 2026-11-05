@@ -32,6 +32,9 @@ customers are on smart meters, the model uses their exact hourly sales (`ami_p`)
 voltages as extra measurement points (`ami_v`). The readings are also used to rank the large
 customers for tamper inspection (see `src/slgrid/ami.py`).
 
+Several feeders (Compare feeders tab): one .zip with one folder per feeder, each holding
+that feeder's files as described here. The folder name is used as the feeder's name.
+
 Load shedding: hours when the feeder was switched off can be left out of the substation
 file or given as zero. The models treat them as dead hours (no flow, no readings) and use
 only energised hours. Hour numbers and timestamps are counted from the start (midnight) of
