@@ -397,3 +397,97 @@ district's transformer areas (19 of 192). Reproduce with `python scripts/run_dis
 - **Limits.** All simulated feeders share one network design; real feeders differ in length,
   load and cable type, which would make unbilled energy a weaker guide and the physics
   estimate more useful. This should be checked on real feeders.
+
+## Phase 13: inspection rounds with honest measurement
+
+**Research first.** Before building, we reviewed what is publicly known (sources in the
+research report [Inspection feedback data and methods](research/inspection_feedback_data_and_methods.md)):
+- **No open dataset joins real feeder data with real inspection outcomes.** The State Grid
+  of China theft dataset has real labels but no feeder layout. The Odisha (India) energy
+  audits give real losses for 800 feeders but no inspection outcomes. The large labelled
+  sets (Brazil, Endesa, Jamaica) are private.
+- **Published hit rates:** untargeted inspections find theft in about 16-25% of visits
+  (Jamaica 16%, Madhya Pradesh 25%, Endesa all visits 17%). Data-targeted campaigns reach
+  28-50% (Rio 28%, Naturgy 36%, Endesa about 50%), and hotspot sweeps 54-80%. Ghana ECG
+  (Ashanti West) surcharged 27% of the customers it visited.
+- **Selection bias:** utilities that train on their own inspections learn the inspectors'
+  map, not the thieves'. In a Brazilian utility, inspected customers differed measurably
+  from the rest (Matthews correlation 0.22-0.27). Greedy "inspect the top" loops can
+  converge on the wrong answer, and a small random share fixes this (IRS audit and
+  insurance-fraud studies).
+- **No published figures** exist for crew sensitivity, cost per inspection or repeat-theft
+  rates, so these are user settings with labelled defaults.
+
+**Built** (`src/slgrid/inspections.py`, the app's *Inspection rounds* tab):
+- **Planner.** Each round sends 85% of visits to the areas with the highest estimated
+  stolen energy and 15% (adjustable 10-20%) to a random sample of all other areas. Every
+  area's chance of selection is written on the work list. Areas visited in the last two
+  rounds are left out.
+- **Log.** Ten outcome codes. Five count as non-technical loss found (bypass, tamper,
+  illegal connection, non-fraud meter fault, billing error). CLEAN is a noisy negative.
+  No access, not found and aborted for safety are missing, never clean. Cable faults are
+  recorded separately.
+- **Measurement.** Hit rate per arm with Wilson 95% intervals, and lift with a bootstrap
+  interval. The share of all areas with theft is estimated by weighting every visit with
+  1/(its chance of selection), allowing for theft crews miss. The verdict stays
+  "insufficient evidence" until the sample size needed to tell model from random (80%
+  power) is reached.
+- **Learning.** The physics estimate stays label-free. Inspections are used to:
+  - calibrate the displayed probability of theft (a two-parameter map fitted on outcomes
+    weighted by 1/chance of selection, allowing for missed theft);
+  - keep a Beta record per area, pooled per feeder;
+  - turn measured theft into a lower bound on the area's stolen energy in the physics
+    model.
+
+**Closed-loop test.** 1,920 simulated transformer areas (60 feeders, 37% with theft), 8
+monthly rounds of 60 visits, 30 repetitions:
+- crews find theft that is there with probability 0.8 x share of premises checked (60-100%);
+- no access on 8% of visits to clean areas and 15% to theft areas;
+- a second situation where 15 feeders' substation meters read 3x high, fooling the physics
+  model there.
+
+Reproduce with `python scripts/run_inspection_study.py`.
+
+| Accurate physics | Greedy (top only) | **Top + 15% random** | Top + random + learning | Spread (random, risk-tilted) | Random |
+|---|---|---|---|---|---|
+| True theft reached (MWh/week) | 1,041 | **950** | 945 | 467 | 202 |
+| Hit rate of model visits | 61% | 61% | 61% | 38% | - |
+| Hit rate of random visits | - | 21% | 19% | 22% | 22% |
+| Share of areas with theft, as each policy would report it (true 36.7%) | 95% | **36.6%** | 33.6% | 34.8% | 34.5% |
+| Model proven better than random after 8 rounds | never | **every run** | every run | 47% of runs | - |
+
+With 15 substation meters reading 3x high, theft reached falls for every model policy
+(greedy 902, top + random 837 MWh/week), and the conclusions are unchanged.
+
+| Displayed probabilities (Brier score, lower is better) | Before | After 8 rounds |
+|---|---|---|
+| Starting from the default map | 0.076 | 0.074 |
+| Starting from a wrong map (as if copied from another utility) | 0.146 | **0.072** |
+
+### What this shows
+- **The random 15% costs about 9% of the theft reached and buys honest numbers.** Top +
+  random reaches 91% of the greedy policy's theft. Its estimate of how many areas have
+  theft is right on average (36.6% against 36.7%, spread about 6.6 points). Its advantage
+  over random visits is proven statistically in every run.
+- **Greedy targeting cannot measure itself.** Its 61% hit rate, read as the state of the
+  network, suggests theft in almost every area (95% after allowing for missed theft)
+  against a true 37%. This is the trap the research warned about.
+- **Spreading visits by risk (our first design) gave up half the theft reached.** The
+  closed-loop test showed this, so the planner was changed to top + random. This is a
+  deliberate change from the research report's suggested design, made on evidence.
+- **Honest note: learning from inspections did not improve the ranking** (945 against 950
+  MWh/week), even when 15 feeders' meters misled the model. The physics estimate already
+  ranks areas well, and an area just inspected is not revisited soon. Re-ranking is
+  therefore off by default in the app.
+- **Where learning does help: honest probabilities.** Starting from a wrong probability map,
+  calibration on the logged outcomes halves the error (Brier 0.146 to 0.072). This is what
+  a utility needs when it takes the tool to a new country.
+- **The interval shown in the app is deliberately cautious.** It comes from the Wilson
+  interval of the random visits (the outcomes of the visited top areas are known). In 40
+  test runs on a 6-feeder district with 4 rounds of 30 visits, it contained the true share
+  every time, and the estimate averaged 28% against a true 31%.
+- **Refusals bias every estimate slightly low** (about 2 points here), because theft areas
+  refuse access more often. The app reports refusals beside every rate.
+- **Limits.** Crew sensitivity (0.8) and refusal behaviour are assumptions. All numbers
+  are from simulation; the module is built to produce the first real measurement when
+  crews use it.

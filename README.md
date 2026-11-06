@@ -61,6 +61,11 @@ data can replace the simulator later without changing the models.
   **prepaid vending records**: the customer list (meter → transformer) and every token
   purchase. The app then works out sales per transformer area itself and also ranks
   **individual prepaid meters** for inspection.
+- **Inspection rounds**: plan each round (top of the list + a 15% random audit, with
+  every area's chance of selection on the work list), upload what crews found (ten outcome
+  codes), and see hit rates with confidence intervals, a verdict on whether the model
+  beats random visits, the estimated share of areas with theft, and calibrated
+  probabilities for the next round.
 - **Compare feeders**: rank several feeders (simulated, or uploaded as one .zip with a
   folder per feeder) by estimated theft and revenue lost, and plan where a limited number
   of inspection crews should go across all of them.
@@ -92,6 +97,7 @@ python scripts\run_shedding_study.py
 python scripts\run_prepaid_study.py
 python scripts\run_ami_study.py
 python scripts\run_district_study.py
+python scripts\run_inspection_study.py
 ```
 
 ## Grounded in Sierra Leone data
@@ -173,6 +179,13 @@ On 25 test scenarios (full log, including a corrected earlier claim, in [`docs/r
    47% of the stolen energy, against 40% with equal crews per feeder and 30% when crews
    concentrate on the feeders with the most unbilled energy. Ranking whole feeders works
    equally well with unbilled energy in this simulation (rank correlation 0.97 for both).
+10. **Inspection rounds that measure themselves.** Each round sends 85% of crews to the top
+    of the list and 15% to random areas, with every area's chance of selection logged.
+    In a closed-loop test this reached 91% of the theft of pure top-of-list targeting, and
+    it was the only policy that both proved it beats random visits and estimated the true
+    share of areas with theft (36.6% against 36.7%). Pure targeting would have reported
+    95%. Logged outcomes also calibrate the displayed probabilities: starting from a wrong
+    map, calibration halved the error.
 
 **How it works:** for each feeder, it finds the theft pattern that best explains the
 substation meter, a few transformer meters and the billing records, while obeying the

@@ -9,6 +9,7 @@ import json
 import sys
 import urllib.request
 import zipfile
+import zlib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -19,9 +20,12 @@ import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 import streamlit as st  # noqa: E402
 
-from slgrid.app_core import (district_params, district_plan, district_table,  # noqa: E402
-                             feeder_summary, large_customer_list, locate, meter_list,
-                             simulate_case, tree_layout)  # noqa: E402
+from slgrid.app_core import (district_areas, district_params, district_plan,  # noqa: E402
+                             district_table, feeder_summary, large_customer_list, locate,
+                             meter_list, simulate_case, simulate_visits, tree_layout)
+from slgrid.inspections import (OUTCOMES, POSITIVE, InspectionConfig,  # noqa: E402
+                                area_posterior, clean_log, evaluate_log, plan_round,
+                                recently_visited)  # noqa: E402
 from slgrid.io import FeederDataError, frames_to_standard, split_district_zip, standard_to_frames  # noqa: E402
 from slgrid.loads import SHEDDING_PATTERNS  # noqa: E402
 
@@ -522,15 +526,115 @@ def district_view(feeders, names, show_truth, key, extras=None):
                  meters=ex[0], large=ex[1])
 
 
+def inspection_report(log, areas, cfg, show_truth, key):
+    """What the inspections so far show, honestly, and the next round's probabilities."""
+    ev = evaluate_log(log, n_areas=len(areas), sensitivity=cfg.sensitivity)
+    st.subheader("What the inspections show")
+    m = st.columns(4)
+    m[0].metric("Inspections logged", ev["inspections"])
+    m[1].metric("Valid outcomes", ev["inspections"] - ev["missing"])
+    m[2].metric("No access / not found / aborted", ev["missing"],
+                f"{ev['refused']} refused", delta_color="off")
+    m[3].metric("Cable or network faults found", ev["network_faults"])
+    rows = []
+    names = {"model": "Model (top of the list)", "random": "Random audit",
+             "tip-off": "Tip-off", "routine": "Routine", "follow-up": "Follow-up"}
+    for arm, a in ev["arms"].items():
+        rows.append({"Selection": names.get(arm, arm), "Valid visits": a["n"],
+                     "Non-technical loss found": a["positives"],
+                     "Hit rate": f"{100 * a['hit_rate']:.0f}%",
+                     "95% interval": f"{100 * a['lo']:.0f}% to {100 * a['hi']:.0f}%",
+                     "kWh recovered (back-billed)": f"{a['kwh_recovered']:,.0f}"})
+    st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch", key=f"{key}_arms")
+    if ev["arms"]:
+        bars = pd.DataFrame([{"arm": names.get(k, k), "rate": 100 * a["hit_rate"],
+                              "lo": 100 * a["lo"], "hi": 100 * a["hi"]} for k, a in ev["arms"].items()])
+        base = alt.Chart(bars).encode(y=alt.Y("arm:N", title=None))
+        st.altair_chart((base.mark_bar(color=ORANGE, opacity=0.8).encode(
+            x=alt.X("rate:Q", title="Hit rate with 95% interval (%)", scale=alt.Scale(domain=[0, 100])))
+            + base.mark_rule(strokeWidth=2).encode(x="lo:Q", x2="hi:Q")).properties(height=40 + 40 * len(bars)),
+            width="stretch", key=f"{key}_armchart")
+    if "evidence" in ev["verdict"] or "no clear" in ev["verdict"]:
+        st.info(f"**Verdict: {ev['verdict']}.** Until then, the model's hit rate is not proof "
+                "that it beats random visits.")
+    else:
+        st.success(f"**Verdict: {ev['verdict']}.**")
+    if ev.get("lift"):
+        L = ev["lift"]
+        st.write(f"Lift (model hit rate / random hit rate): **{L['value']:.1f}x**, "
+                 f"95% interval {L['lo']:.1f}x to {L['hi']:.1f}x.")
+    if "ht_theft_share" in ev:
+        lo, hi = ev["ht_theft_interval"]
+        st.write(f"Share of all transformer areas with non-technical loss, estimated from every "
+                 f"valid visit weighted by its selection probability: about "
+                 f"**{100 * ev['ht_theft_share']:.0f}%** (95% interval {100 * lo:.0f}% to "
+                 f"{100 * hi:.0f}%), allowing for theft that crews miss (crew sensitivity "
+                 f"{cfg.sensitivity:.0%}, an assumption). The interval is wide while there are few "
+                 f"random-audit visits; it narrows round by round.")
+        if show_truth and "true_theft" in areas:
+            st.caption(f"Truth (simulation only): {100 * areas.true_theft.mean():.0f}% of areas have theft.")
+    post = area_posterior(areas[["feeder", "bus", "model_score", "weight"]], log, cfg)
+    cal = post.attrs["calibration"]
+    st.caption(("Probabilities below are calibrated on the logged outcomes "
+                f"({cal['n']} valid visits): P(theft) = 1 / (1 + exp(-({cal['a']:.2f} + {cal['b']:.2f} x estimated stolen share))).")
+               if cal["fitted"] else
+               f"Probabilities below use the default map until {cfg.calibrate_after} valid "
+               f"outcomes are logged (now {cal['n']}).")
+    st.caption("These numbers do not show how much theft was missed (recall cannot be measured "
+               "from inspections), a CLEAN result is not proof of no theft, and no-access visits "
+               "are left out of every rate. A finding is the crew's record with its evidence, not "
+               "the model's ranking.")
+    return post
+
+
+def inspection_planner(areas, post, cfg, key, round_id, show_truth, log=None):
+    budget = st.slider("Transformer areas to visit in the next round", 5, min(200, len(areas)),
+                       min(30, len(areas)), key=f"{key}_budget")
+    base = post if post is not None else areas
+    a = base[["feeder", "bus", "model_score"]].copy()
+    a["weight"] = base["next_weight"].values if (post is not None and st.session_state.get(f"{key}_use")) \
+        else areas["weight"].values
+    recent = recently_visited(log, cfg.cooldown_rounds)
+    if recent:
+        keep = [(f, b) not in recent for f, b in zip(a.feeder, a.bus)]
+        st.caption(f"{len(keep) - sum(keep)} areas visited in the last {cfg.cooldown_rounds} rounds "
+                   "are left out of this round (they were just dealt with); their chance is 0.")
+        a = a[keep]
+    plan = plan_round(a, budget, cfg, seed=zlib.crc32(round_id.encode()) % 10_000,
+                      round_id=round_id)
+    if post is not None:
+        plan = plan.merge(post[["feeder", "bus", "p_post", "visits", "positives"]], on=["feeder", "bus"], how="left")
+    show = pd.DataFrame({
+        "Inspection": plan.inspection_id, "Feeder": plan.feeder,
+        "Area (bus)": plan.bus.str.replace("bus_", ""), "Selection": plan.selection_arm,
+        "Chance of selection": (100 * plan.pi).round(1).astype(str) + "%",
+        "Estimated stolen (MWh/month)": plan.weight.round(1)})
+    if "p_post" in plan:
+        show["P(theft) now"] = (100 * plan.p_post).round(0).astype(int).astype(str) + "%"
+        show["Earlier visits"] = plan.visits.fillna(0).astype(int)
+    st.dataframe(show, hide_index=True, width="stretch", height=300, key=f"{key}_plan")
+    cols = [c for c in ["inspection_id", "round_id", "feeder", "bus", "selection_arm", "pi",
+                        "model_score", "model_rank", "model_version", "date", "crew", "premises",
+                        "premises_checked", "outcome", "kwh_per_day_found", "kwh_recovered",
+                        "amount_billed", "amount_collected", "notes"] if c in plan]
+    st.download_button("Download the work list for crews (CSV)",
+                       plan[cols].to_csv(index=False).encode(), f"work_list_{round_id}.csv",
+                       "text/csv", key=f"{key}_wl")
+    st.caption("Crews fill in date, crew, premises, premises_checked, outcome (one of the codes "
+               "below), kwh_per_day_found and kwh_recovered, then upload the file back here. Keep "
+               "the pi and selection_arm columns as they are: they make the results measurable.")
+    return plan
+
+
 # ----------------------------------------------------------------------------- layout
 st.title("⚡ Feeder Loss Locator")
 st.write("Find **where** electricity is being lost on an 11 kV distribution feeder, using the "
          "substation meter, a few transformer meters, billing records and the transformer "
          "register. No customer smart meters and no records of past theft are needed.")
 
-tab_sim, tab_own, tab_dist, tab_study, tab_how = st.tabs(
-    ["Simulate a feeder", "Analyse your own data", "Compare feeders", "Study results",
-     "How it works"])
+tab_sim, tab_own, tab_dist, tab_insp, tab_study, tab_how = st.tabs(
+    ["Simulate a feeder", "Analyse your own data", "Compare feeders", "Inspection rounds",
+     "Study results", "How it works"])
 
 # --- 1. Simulation ------------------------------------------------------------------
 with tab_sim:
@@ -759,6 +863,110 @@ with tab_dist:
                 district_view(feeders, names, show_truth=False, key="dup", extras=extras)
 
 
+with tab_insp:
+    st.write("Plan inspection rounds, log what crews find, and measure honestly whether the "
+             "targeting works. Each round sends most crews to the top of the list and about 15% "
+             "to randomly chosen areas: the random visits are the yardstick that makes every other "
+             "number credible. Every area's chance of selection is written on the work list.")
+    with st.expander("Outcome codes for the log"):
+        st.dataframe(pd.DataFrame({"Code": list(OUTCOMES), "Meaning": list(OUTCOMES.values()),
+                                   "Counts as": ["non-technical loss found" if k in POSITIVE else
+                                                 "nothing found (may miss theft)" if k == "CLEAN" else
+                                                 "a finding, not theft" if k == "CABLE_OR_NETWORK_FAULT" else
+                                                 "missing (not counted as clean)" for k in OUTCOMES]}),
+                     hide_index=True, width="stretch")
+    c1, c2, c3 = st.columns(3)
+    share = c1.slider("Random audit share", 0.10, 0.20, 0.15, 0.01,
+                      help="Share of each round sent to randomly chosen areas (10-20%).")
+    sens = c2.slider("Crew sensitivity (assumption)", 0.5, 1.0, 0.8, 0.05,
+                     help="Chance a crew finds theft that is there. No published figure exists; "
+                          "0.8 is an assumption.")
+    use = c3.checkbox("Use inspection results in the ranking", value=False, key="insp_use",
+                      help="Off by default: in the closed-loop study this did not improve the theft "
+                           "reached. The results are always used to calibrate the probabilities.")
+    st.session_state["isim_use"] = st.session_state["iown_use"] = use
+    cfg = InspectionConfig(random_share=share, sensitivity=sens)
+    mode = st.radio("Data", ["Practice with a simulated district", "My feeders and inspection log"],
+                    horizontal=True, key="insp_mode")
+    if mode == "Practice with a simulated district":
+        with st.form("insp_form"):
+            c1, c2, c3 = st.columns(3)
+            nf = c1.slider("Number of feeders", 3, 10, 6, key="insp_nf")
+            rounds = c2.slider("Rounds already done", 0, 12, 4)
+            budget = c3.slider("Areas visited per round", 10, 60, 30)
+            iseed = st.number_input("Random seed", 0, 10_000, 5, step=1, key="insp_seed")
+            go = st.form_submit_button("Simulate rounds", type="primary")
+        if go:
+            st.session_state["insp_args"] = (nf, rounds, budget, int(iseed))
+        if "insp_args" in st.session_state:
+            nf, rounds, budget, iseed = st.session_state["insp_args"]
+            feeders = {}
+            bar = st.progress(0.0, text="Analysing feeders...")
+            for i, p in enumerate(district_params(nf, iseed)):
+                d, res, _, _ = run_simulation(p["theft"], p["n_meters"], "ends", 0.2, p["fault"], 7,
+                                              p["seed"], "daily", 0.03, p["shedding"], 0.05, False)
+                feeders[f"Feeder {i + 1}"] = (d, res)
+                bar.progress((i + 1) / nf)
+            bar.empty()
+            areas = district_areas(feeders)
+            logs = []
+            for r in range(rounds):
+                a = areas[["feeder", "bus", "model_score", "weight"]].copy()
+                if logs:
+                    recent = recently_visited(clean_log(pd.concat(logs)), cfg.cooldown_rounds)
+                    a = a[[(f, b) not in recent for f, b in zip(a.feeder, a.bus)]]
+                if logs and use:
+                    a = a.assign(weight=area_posterior(a, clean_log(pd.concat(logs)), cfg)["next_weight"].values)
+                plan = plan_round(a, budget, cfg, seed=iseed * 100 + r, round_id=f"R{r + 1}")
+                logs.append(simulate_visits(plan, areas, seed=iseed * 100 + r, sensitivity=sens))
+            post = None
+            if logs:
+                raw = pd.concat(logs, ignore_index=True)
+                log = clean_log(raw)
+                post = inspection_report(log, areas, cfg, True, "isim")
+                st.download_button("Download the simulated inspection log (CSV)",
+                                   raw.to_csv(index=False).encode(), "inspection_log.csv",
+                                   "text/csv", key="isim_log")
+            st.subheader(f"Next round: R{rounds + 1}")
+            inspection_planner(areas, post, cfg, "isim", f"R{rounds + 1}", True,
+                               log if logs else None)
+    else:
+        st.markdown("Upload your feeders as a **district .zip** (one folder per feeder, as in "
+                    "*Compare feeders*). Add the **inspection log** (the work lists filled in by "
+                    "crews, all rounds in one CSV) once you have one.")
+        c1, c2 = st.columns(2)
+        zf = c1.file_uploader("District .zip", type="zip", key="insp_zip")
+        lf = c2.file_uploader("Inspection log (CSV, optional)", type="csv", key="insp_log")
+        if zf is not None:
+            feeders, names = {}, {}
+            try:
+                parts = split_district_zip(zf.getvalue())
+                for name, files in parts.items():
+                    if "billing" in files:
+                        files = {k: v for k, v in files.items() if k not in PREPAID_FILES}
+                    d, res, nm, _, _ = run_uploaded(files, 0.90, 0.03)
+                    feeders[name], names[name] = (d, res), nm
+            except FeederDataError as e:
+                st.error(f"There is a problem with the files: {e}")
+            if feeders:
+                areas = district_areas(feeders)
+                # utility bus names in the work list
+                areas["bus"] = [(names[f] or {}).get(b, b.replace("bus_", ""))
+                                for f, b in zip(areas.feeder, areas.bus)]
+                post = None
+                if lf is not None:
+                    try:
+                        log = clean_log(pd.read_csv(lf))
+                        log["bus"] = log["bus"].astype(str)
+                        post = inspection_report(log, areas, cfg, False, "iown")
+                    except ValueError as e:
+                        st.error(f"There is a problem with the inspection log: {e}")
+                rid = st.text_input("Name of the next round", "R1", key="insp_rid")
+                st.subheader(f"Next round: {rid}")
+                inspection_planner(areas, post, cfg, "iown", rid, False,
+                                   log if post is not None else None)
+
+
 # --- 3. Study results ---------------------------------------------------------------
 with tab_study:
     st.write("Results from 100 simulated weeks (25 held back for testing). "
@@ -880,6 +1088,21 @@ with tab_study:
                 "crews: worst feeders by unbilled", "crews: random"]]}),
             hide_index=True, width="stretch")
 
+    in_path = ROOT / "results" / "inspections.csv"
+    if in_path.exists():
+        ins = pd.read_csv(in_path)
+        ins = ins[ins.scenario == "accurate physics"]
+        st.markdown("**Inspection rounds** (1,920 simulated areas, 8 rounds of 60 visits, "
+                    "30 repetitions; true share of areas with theft 36.7%)")
+        st.dataframe(pd.DataFrame({
+            "Policy": ins.policy.map({"greedy": "Top of the list only", "top+random": "Top + 15% random (app)",
+                                      "top+random+learn": "Top + random + re-ranking",
+                                      "spread": "Risk-tilted random draw", "random": "Random"}),
+            "Theft reached (MWh/week)": ins["theft reached (MWh/week)"].round(0).astype(int),
+            "Share of areas with theft, as reported (%)": (100 * ins["estimated theft share of areas"]).round(1),
+            "Proven better than random (% of runs)": (100 * ins["verdict model>random"]).round(0)}),
+            hide_index=True, width="stretch")
+
 # --- 4. How it works ------------------------------------------------------------------
 with tab_how:
     st.markdown("""
@@ -925,6 +1148,13 @@ the areas where every customer has one, and extra voltage points along the feede
 large customer is checked for a lasting drop in daily use and for a peak far below its
 contracted capacity, which is how a meter that records only part of the load looks. A check
 meter on each large-customer transformer then makes the energy balance of those areas exact.
+
+**Inspection rounds.** Most crews go to the top of the list, and about 15% to randomly
+chosen areas, with every area's chance of selection written on the work list. The random
+visits are the yardstick: they show whether the targeting beats chance, and, weighted by
+the chances of selection, how many areas really have theft. Outcomes then calibrate the
+probabilities the app shows. The physics estimate itself never learns from inspection
+labels, so it cannot inherit the inspectors' blind spots.
 
 **Several feeders.** The *Compare feeders* tab runs the same analysis on every feeder of a
 district, ranks the feeders by estimated theft and revenue lost, and plans where a limited

@@ -1,0 +1,5 @@
+scenario,start,Brier before,Brier after 8 rounds
+accurate physics,default map,0.07634423665637827,0.07481049382601838
+accurate physics,wrong map,0.14577848945120433,0.07229446686860022
+substation meter reads 3x high on 15 feeders,default map,0.08567205645865496,0.0785072244300437
+substation meter reads 3x high on 15 feeders,wrong map,0.14570338990149317,0.07909198003924114

@@ -279,3 +279,50 @@ def district_plan(feeders: dict, n_areas: int) -> pd.DataFrame:
     if "true_stolen_month" in allp:
         plan.attrs["true_total_month"] = float(allp.true_stolen_month.sum())
     return plan
+
+
+# ----------------------------------------------------------------------------- inspections
+def district_areas(feeders: dict) -> pd.DataFrame:
+    """All transformer areas of a district, for planning inspection rounds: feeder, bus,
+    model_score (estimated stolen share), weight (estimated stolen MWh per month), and the
+    truth columns when simulated."""
+    parts = []
+    for name, (d, res) in feeders.items():
+        pm = 30.0 / (d["head"].shape[1] / 24)
+        p = pd.DataFrame({"feeder": name, "bus": res.bus.values,
+                          "model_score": res.share_physics.values,
+                          "weight": np.maximum(res.stolen_physics_mwh.values * pm, 1e-6),
+                          "kva": res.kva.values})
+        if "true_hotspot" in res:
+            p["true_theft"] = res.true_hotspot.values
+            p["true_stolen_month"] = res.true_stolen_mwh.values * pm
+        parts.append(p)
+    return pd.concat(parts, ignore_index=True)
+
+
+def simulate_visits(plan: pd.DataFrame, areas: pd.DataFrame, seed: int,
+                    sensitivity: float = 0.8) -> pd.DataFrame:
+    """Fill in a work list as simulated crews would: theft found with probability
+    sensitivity x share of premises checked (60-100%); no access on 8% of visits to clean
+    areas and 15% to theft areas; recovered energy for found theft."""
+    rng = np.random.default_rng(seed)
+    t = areas.set_index(["feeder", "bus"]).loc[list(zip(plan.feeder, plan.bus))]
+    theft = t["true_theft"].values.astype(bool)
+    out = plan.copy()
+    n = len(out)
+    cov = rng.uniform(0.6, 1.0, n)
+    prem = rng.integers(60, 400, n)
+    miss = rng.random(n) < np.where(theft, 0.15, 0.08)
+    found = theft & ~miss & (rng.random(n) < sensitivity * cov)
+    kinds = np.array(["THEFT_BYPASS", "METER_TAMPER", "ILLEGAL_CONNECTION"])
+    out["premises"] = prem
+    out["premises_checked"] = np.round(prem * cov).astype(int)
+    out["outcome"] = np.where(miss, rng.choice(["NO_ACCESS_REFUSED", "NOT_FOUND_ADDRESS_ERROR"], n,
+                                               p=[0.8, 0.2]),
+                              np.where(found, rng.choice(kinds, n, p=[0.4, 0.2, 0.4]), "CLEAN"))
+    daily = t["true_stolen_month"].values * 1000 / 30          # kWh per day really stolen
+    out["kwh_per_day_found"] = np.where(found, np.round(daily * cov * rng.uniform(0.5, 1.0, n), 1),
+                                        np.nan)
+    out["kwh_recovered"] = np.where(found, np.round(out["kwh_per_day_found"] * 90), np.nan)
+    out["crew"] = rng.choice(["Crew A", "Crew B", "Crew C"], n)
+    return out

@@ -35,6 +35,14 @@ customers for tamper inspection (see `src/slgrid/ami.py`).
 Several feeders (Compare feeders tab): one .zip with one folder per feeder, each holding
 that feeder's files as described here. The folder name is used as the feeder's name.
 
+Inspection log (Inspection rounds tab): the work list the app produces, filled in by crews,
+all rounds in one CSV. Columns: `inspection_id`, `round_id`, `feeder`, `bus`,
+`selection_arm`, `pi` (chance of selection; keep as written), `model_score`, `date`,
+`crew`, `premises`, `premises_checked`, `outcome`, `kwh_per_day_found`, `kwh_recovered`,
+`amount_billed`, `amount_collected`, `notes`. Outcome codes: THEFT_BYPASS, METER_TAMPER,
+ILLEGAL_CONNECTION, METER_FAULT_NONFRAUD, BILLING_ERROR (non-technical loss found),
+CABLE_OR_NETWORK_FAULT, CLEAN, NO_ACCESS_REFUSED, NOT_FOUND_ADDRESS_ERROR, ABORTED_SAFETY.
+
 Load shedding: hours when the feeder was switched off can be left out of the substation
 file or given as zero. The models treat them as dead hours (no flow, no readings) and use
 only energised hours. Hour numbers and timestamps are counted from the start (midnight) of

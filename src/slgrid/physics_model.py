@@ -278,7 +278,10 @@ class PhysicsInformedLocator:
             blocks.append(A); rhs.append(np.zeros(M))
 
             Amat, y = np.vstack(blocks), np.concatenate(rhs)
-            lb = np.concatenate([np.zeros(2 * B), [-np.inf], np.full(M, -np.inf)])
+            # theft measured by inspection crews sets a floor on theta (see inspections.py)
+            th_min = (np.minimum(d["theta_min"][s], cfg.max_theta * 0.99)
+                      if "theta_min" in d else np.zeros(B))
+            lb = np.concatenate([th_min, np.zeros(B), [-np.inf], np.full(M, -np.inf)])
             ub = np.concatenate([np.full(B, cfg.max_theta), fault_ub,
                                  [np.inf], np.full(M, np.inf)])
             sol = lsq_linear(Amat, y, bounds=(lb, ub), method="trf", lsmr_tol="auto")
