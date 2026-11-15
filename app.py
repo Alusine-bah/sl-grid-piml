@@ -544,7 +544,7 @@ def inspection_report(log, areas, cfg, show_truth, key):
                      "Non-technical loss found": a["positives"],
                      "Hit rate": f"{100 * a['hit_rate']:.0f}%",
                      "95% interval": f"{100 * a['lo']:.0f}% to {100 * a['hi']:.0f}%",
-                     "kWh recovered (back-billed)": f"{a['kwh_recovered']:,.0f}"})
+                     "kWh back-billed": f"{a['kwh_recovered']:,.0f}"})
     st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch", key=f"{key}_arms")
     if ev["arms"]:
         bars = pd.DataFrame([{"arm": names.get(k, k), "rate": 100 * a["hit_rate"],

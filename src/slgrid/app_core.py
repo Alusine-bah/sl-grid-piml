@@ -323,6 +323,11 @@ def simulate_visits(plan: pd.DataFrame, areas: pd.DataFrame, seed: int,
     daily = t["true_stolen_month"].values * 1000 / 30          # kWh per day really stolen
     out["kwh_per_day_found"] = np.where(found, np.round(daily * cov * rng.uniform(0.5, 1.0, n), 1),
                                         np.nan)
-    out["kwh_recovered"] = np.where(found, np.round(out["kwh_per_day_found"] * 90), np.nan)
+    # back-billing reaches only the account holders caught (illegal connections have no
+    # account): 1-6 cases per area, each billed for about 3 months of a household's use
+    # (EDSA's average customer buys under 3 kWh a day; 2-8 kWh/day assumed for these)
+    cases = rng.integers(1, 7, n)
+    per_case = rng.uniform(2.0, 8.0, n) * 90
+    out["kwh_recovered"] = np.where(found, np.round(cases * per_case), np.nan)
     out["crew"] = rng.choice(["Crew A", "Crew B", "Crew C"], n)
     return out
