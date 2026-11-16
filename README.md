@@ -141,7 +141,11 @@ provide to run the models on a real feeder.
 > - ranking areas is about level with combined rules (both reach 84% of the best possible
 >   top-30% list).
 >
-> Details in [`docs/results.md`](docs/results.md), Phase 14.
+> - **where meters go matters more than how many**: meters on the 6-10 largest transformers
+>   lift the inspection list from 76% to 86-90% of the best possible, better than 16 meters at
+>   the far ends of branches (Phase 15).
+>
+> Details in [`docs/results.md`](docs/results.md), Phases 14 and 15.
 
 On 25 test scenarios (hotspot pattern) (full log, including a corrected earlier claim, in [`docs/results.md`](docs/results.md)):
 

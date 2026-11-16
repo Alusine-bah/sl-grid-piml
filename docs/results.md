@@ -557,3 +557,39 @@ meter is simply not enough to rank 26 unmetered areas sharply.
   results.
 - **Real data changed the conclusions, as it should.** Further studies should use the
   realistic pattern by default.
+
+## Phase 15: how many transformer meters, and where?
+
+**Question.** With losses spread as on real feeders (Phase 14), area ranking is limited by
+how much is measured. How many transformer meters does a feeder need, and where should they
+go?
+
+**Study.** 30 feeder-weeks with the realistic (Odisha) loss pattern. Between 0 and 24 of the
+32 transformer areas get meters (20% of readings missing), placed either on the largest
+transformers or at the far ends of branches. Settings are as in the app (cable-fault
+detector on). Measured over all areas, as a utility sees the whole feeder. Reproduce with
+`python scripts/run_metering_study.py`.
+
+| Meters (of 32) | Largest transformers: top-30% reach* | Far ends: top-30% reach* | Physics: total stolen error | Rules: total stolen error |
+|---|---|---|---|---|
+| 0 | 76% | 76% | 0.9% | 4.2% |
+| 3 | 81% | 78% | 1.0-1.2% | 4.2% |
+| 6 | **86%** | 81% | 1.2-1.4% | 4.2% |
+| 10 | **90%** | 82% | 1.2-1.4% | 4.2% |
+| 16 | 94% | 85% | 1.2-1.6% | 4.2% |
+| 24 | 98% | 95% | 1.5-1.7% | 4.2% |
+
+*Share of the true stolen energy in the 30% of areas ranked first, as a share of the best
+possible ranking (physics-informed model; combined rules are within one point).
+
+### What this shows
+- **Placement matters more than numbers.** On realistic losses, meters on the largest
+  transformers beat meters at the far ends of branches: 6 large-transformer meters (86%) do
+  better than 16 far-end meters (85%). The far-end placement found best in Phase 5 relied on
+  the hotspot pattern; the app now defaults to the largest transformers.
+- **The first meters pay most.** Six meters on the largest transformers add 10 points; going
+  from 16 to 24 adds 4.
+- **The physics model keeps the feeder total accurate** (1-2% error) with any number of
+  meters, against 4.2% for the rule-based method. For ranking areas, the two are level.
+- **Recommendation:** meter the 6-10 largest transformers of each feeder first. That alone
+  lifts the inspection list from 76% to about 86-90% of the best possible.

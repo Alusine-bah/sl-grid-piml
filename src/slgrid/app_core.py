@@ -221,7 +221,7 @@ def district_params(n_feeders: int, seed: int) -> list[dict]:
 
 def simulate_district(n_feeders: int, n_days: int, seed: int) -> dict:
     """Simulate a district; returns {feeder name: d}."""
-    return {f"Feeder {i + 1}": simulate_case(p["theft"], p["n_meters"], "ends", 0.2, p["fault"],
+    return {f"Feeder {i + 1}": simulate_case(p["theft"], p["n_meters"], "largest", 0.2, p["fault"],
                                              n_days, p["seed"], shedding=p["shedding"])
             for i, p in enumerate(district_params(n_feeders, seed))}
 

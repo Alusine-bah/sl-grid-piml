@@ -647,7 +647,10 @@ with tab_sim:
                           help="Sierra Leone's commercial losses are reported at 18-40%.")
         days = c1.select_slider("Days of data", [1, 2, 3, 5, 7], value=3)
         n_meters = c2.slider("Transformer meters installed", 0, 16, 6)
-        strategy = c2.selectbox("Where meters are placed", ["ends", "largest", "random"],
+        strategy = c2.selectbox("Where meters are placed", ["largest", "ends", "random"],
+                                help="Largest transformers is the recommended placement: with "
+                                     "losses spread as on real feeders it ranks areas best "
+                                     "(Study results, transformer meters).",
                                 format_func={"ends": "Far ends of branches",
                                              "largest": "Largest transformers",
                                              "random": "Random"}.get)
@@ -809,7 +812,7 @@ with tab_dist:
             feeders = {}
             bar = st.progress(0.0, text="Simulating and analysing feeders...")
             for i, p in enumerate(district_params(n_f, dseed)):
-                d, res, _, _ = run_simulation(p["theft"], p["n_meters"], "ends", 0.2, p["fault"],
+                d, res, _, _ = run_simulation(p["theft"], p["n_meters"], "largest", 0.2, p["fault"],
                                               n_days, p["seed"], "daily", 0.03, p["shedding"],
                                               0.05, False)
                 feeders[f"Feeder {i + 1}"] = (d, res)
@@ -903,7 +906,7 @@ with tab_insp:
             feeders = {}
             bar = st.progress(0.0, text="Analysing feeders...")
             for i, p in enumerate(district_params(nf, iseed)):
-                d, res, _, _ = run_simulation(p["theft"], p["n_meters"], "ends", 0.2, p["fault"], 7,
+                d, res, _, _ = run_simulation(p["theft"], p["n_meters"], "largest", 0.2, p["fault"], 7,
                                               p["seed"], "daily", 0.03, p["shedding"], 0.05, False)
                 feeders[f"Feeder {i + 1}"] = (d, res)
                 bar.progress((i + 1) / nf)
@@ -1070,6 +1073,19 @@ with tab_study:
             "Error in total stolen (%)": rr["total err %"].round(1),
             "Stolen energy in top 30% of areas (% of best)": rr["top 30% reach %"].round(0)}),
             hide_index=True, width="stretch")
+
+    me_path = ROOT / "results" / "metering.csv"
+    if me_path.exists():
+        me = pd.read_csv(me_path)
+        me = me[me.method == "physics-informed"]
+        st.markdown("**How many transformer meters, and where?** (realistic spread losses, "
+                    "30 feeder-weeks; share of the stolen energy found by inspecting the top 30% "
+                    "of areas, as a share of the best possible)")
+        piv = me.pivot_table(index="meters", columns="strategy", values="top 30% reach %")
+        piv = piv.rename(columns={"largest": "On the largest transformers", "ends": "At far ends of branches",
+                                  "none": "No meters"}).round(0)
+        st.dataframe(piv.reset_index().rename(columns={"meters": "Meters (of 32 areas)"}),
+                     hide_index=True, width="stretch")
 
     am_path = ROOT / "results" / "ami.csv"
     if am_path.exists():
