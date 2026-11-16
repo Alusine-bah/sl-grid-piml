@@ -54,6 +54,7 @@ class DatasetConfig:
     kva_spread: float = 0.35       # how loosely transformer ratings follow actual peak load
     shedding: str = "none"         # load-shedding pattern (see loads.SHEDDING_PATTERNS)
     cold_load: float = 0.3         # demand surge when supply returns after an outage
+    theft_pattern: str = "hotspot" # or "odisha": losses spread as on real Odisha feeders
     seed: int = 0
 
 
@@ -87,7 +88,7 @@ def generate(cfg: DatasetConfig, out_dir: str | Path, name: str = "dataset",
     for s in it:
         ntl = float(rng.choice(cfg.ntl_levels))
         n_fault = int(rng.random() < cfg.fault_probability)
-        scfg = ScenarioConfig(target_ntl=ntl, n_fault_buses=n_fault)
+        scfg = ScenarioConfig(target_ntl=ntl, n_fault_buses=n_fault, pattern=cfg.theft_pattern)
         cust = perturb_customers(base_cust, rng, cfg.customer_spread) if cfg.customer_spread else base_cust
         demand = generate_profiles(cust, n_days=cfg.n_days, seed=int(rng.integers(1 << 31)))
         on = supply_schedule(cfg.n_days, cfg.shedding, rng)

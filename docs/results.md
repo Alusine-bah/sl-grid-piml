@@ -491,3 +491,69 @@ With 15 substation meters reading 3x high, theft reached falls for every model p
 - **Limits.** Crew sensitivity (0.8) and refusal behaviour are assumptions. All numbers
   are from simulation; the module is built to produce the first real measurement when
   crews use it.
+
+## Phase 14: reality check against real transformer data
+
+**Real data.** TP Central Odisha (India) publishes energy accounts for each metered
+distribution transformer. We extracted 1,867 transformers on 468 feeders for July-September
+2024 (`data/real/odisha_dt_losses_q2fy25.csv`, source and extraction notes in
+`data/real/README.md`). Each row passes the check loss = 1 - billed / received.
+
+| Loss per transformer area | Real Odisha | Our simulation (hotspots) |
+|---|---|---|
+| Median | 33% | 0% |
+| Areas below 10% | 12% | 63% |
+| Areas at 50% or more | 30% | 24% |
+| Share of areas holding half the lost energy (median feeder) | 29% | 9% |
+
+Real losses include low-voltage technical losses, but those are only a few percent per area.
+**The original simulator was too all-or-nothing:** it put theft in a few hotspots and left
+most areas clean. Real losses are spread over almost every transformer area.
+
+**Change.** The simulator now has a second theft pattern, `theft_pattern="odisha"`. Each
+simulated feeder copies the loss pattern of a randomly chosen real Odisha feeder (at least 6
+metered transformers):
+- every area draws a loss share from that feeder's transformers;
+- 6 points of low-voltage technical loss are subtracted;
+- all areas are scaled together to the feeder's theft level;
+- an area counts as "theft" above 15% of its consumption.
+
+Simulated feeders then hold half their stolen energy in 22% of areas, against 29% in the real
+data.
+
+**Study.** 60 feeder-weeks per pattern, same settings and seed. Reproduce with
+`python scripts/run_realism_study.py`.
+
+| Method | Pattern | AUC unmetered | Error in total stolen | Stolen energy in top 30% of areas* | Error per area (MWh) |
+|---|---|---|---|---|---|
+| Physics-informed | hotspots | 0.93 | 1.3% | 90% | 1.83 |
+| Combined rules | hotspots | 0.92 | 3.0% | 88% | 2.07 |
+| Energy audit | hotspots | 0.64 | 3.0% | 49% | 4.29 |
+| Physics-informed | **real (Odisha) spread** | **0.76** | **1.1%** | **84%** | 2.43 |
+| Combined rules | real (Odisha) spread | 0.74 | 3.9% | 84% | 2.52 |
+| Energy audit | real (Odisha) spread | 0.69 | 3.9% | 78% | 2.38 |
+
+*As a share of what a perfect ranking would reach.
+
+**A fix that did not work.** We tested whether starting each area from the feeder's average
+loss, instead of from its transformer rating, would help with spread losses. The prior was
+blended between the two (0, 30, 60, 100%), with two strengths, on 30 feeder-weeks of each
+pattern. AUC moved by at most 0.003 and the reach by at most 1 point. Fully average priors
+were clearly worse (AUC 0.68). The default is unchanged: the prior is not the bottleneck.
+With spread losses, the information in 6 transformer meters, the ratings and the substation
+meter is simply not enough to rank 26 unmetered areas sharply.
+
+### What this shows
+- **Headline numbers in earlier phases are optimistic.** They used the hotspot pattern. On
+  realistic spread losses, telling theft areas from clean ones falls from 0.93 to 0.76 AUC.
+- **The feeder total is robust.** The physics-informed model still estimates a feeder's
+  stolen energy within about 1%, three times better than the rule-based methods (3.9%).
+  This is its clearest real advantage.
+- **Ranking areas, the advantage almost disappears.** Physics-informed and combined rules
+  both reach 84% of the best possible top-30% list; the plain energy audit 78%.
+- **The tool's value on spread losses** is the accurate feeder total (which feeder, how
+  much, how much money), plus a ranked list that is useful but not sharp. Sharper area
+  ranking needs more measurement: more transformer meters, smart meters, or inspection
+  results.
+- **Real data changed the conclusions, as it should.** Further studies should use the
+  realistic pattern by default.

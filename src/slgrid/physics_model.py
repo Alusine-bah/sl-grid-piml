@@ -59,6 +59,7 @@ class PhysicsConfig:
     sd_offset: float = 0.005        # pu, expected size of a meter's voltage calibration offset
     prior_weight: float = 0.5       # pull of theta toward the feeder average (no kVA data)
     capacity_sd: float = 0.35       # how loosely transformer loading follows its kVA rating
+    prior_blend: float = 0.0        # 0: prior from kVA ratings; 1: feeder average for every area
     fault_weight: float = 200.0     # penalty per MW of leakage, so faults are only used when needed
     max_theta: float = 9.0          # stolen share at most 90%
     max_fault_mw: float = 0.3
@@ -202,6 +203,9 @@ class PhysicsInformedLocator:
             expected = kva / kva.sum() * head_p.sum() * 0.97
             theta_prior = np.clip(expected / b.sum(axis=0) - 1, 0, cfg.max_theta)
             prior_sd = cfg.capacity_sd * (1 + theta_prior) + 0.05
+            if cfg.prior_blend > 0:
+                # shrink toward the feeder average: losses spread over many areas
+                theta_prior = (1 - cfg.prior_blend) * theta_prior + cfg.prior_blend * theta_bar
         else:
             theta_prior = np.full(B, theta_bar)
             prior_sd = np.full(B, 1.0 / cfg.prior_weight)

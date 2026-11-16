@@ -1058,6 +1058,19 @@ with tab_study:
                 t[c] = t[c].map(lambda v: "" if pd.isna(v) else f"{100 * v:.0f}%")
         st.dataframe(t.round(3), hide_index=True, width="stretch")
 
+    re_path = ROOT / "results" / "realism.csv"
+    if re_path.exists():
+        rr = pd.read_csv(re_path)
+        st.markdown("**Reality check: theft in a few hotspots vs losses spread as on real Odisha "
+                    "feeders** (60 feeder-weeks each)")
+        st.dataframe(pd.DataFrame({
+            "Loss pattern": rr.pattern.map({"hotspot": "Hotspots (earlier studies)",
+                                            "odisha": "Real spread (Odisha)"}),
+            "Method": rr.method, "Locating theft (AUC)": rr["AUC unmetered"].round(3),
+            "Error in total stolen (%)": rr["total err %"].round(1),
+            "Stolen energy in top 30% of areas (% of best)": rr["top 30% reach %"].round(0)}),
+            hide_index=True, width="stretch")
+
     am_path = ROOT / "results" / "ami.csv"
     if am_path.exists():
         am = pd.read_csv(am_path)
@@ -1162,7 +1175,10 @@ number of crews should go: the areas with the highest estimated theft across all
 not the same number on every feeder.
 
 **Honest limits.** All results so far come from simulation calibrated to published Freetown
-data. Fault location is to a section of the feeder (typically 8 of 32 buses), not one exact
+data. A check against real transformer accounts from Odisha, India showed that real losses
+are spread over most transformer areas, not concentrated in a few: on that pattern, telling
+theft areas from clean ones drops from 0.93 to 0.76 AUC, while the feeder's total stolen
+energy stays within about 1%. Fault location is to a section of the feeder (typically 8 of 32 buses), not one exact
 transformer. A fault already present at the start of the data shows no step and is not
 detected. An out-of-date transformer register reduces accuracy for every method.
 

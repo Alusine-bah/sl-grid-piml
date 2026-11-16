@@ -130,7 +130,20 @@ See [`docs/data_format.md`](docs/data_format.md) for the exact data a utility wo
 provide to run the models on a real feeder.
 
 ## Results
-On 25 test scenarios (full log, including a corrected earlier claim, in [`docs/results.md`](docs/results.md)):
+
+> **Reality check (Phase 14).** Real transformer accounts from TP Central Odisha (India) show
+> losses spread over almost every transformer area: median 33%, and half the lost energy in
+> about 3 in 10 areas. The results in the tables below used a simpler hotspot pattern and are
+> optimistic. On realistic spread losses:
+> - telling theft areas from clean ones falls from **0.93 to 0.76 AUC**;
+> - the **feeder's total stolen energy stays within about 1%**, three times better than the
+>   rule-based methods (3.9%);
+> - ranking areas is about level with combined rules (both reach 84% of the best possible
+>   top-30% list).
+>
+> Details in [`docs/results.md`](docs/results.md), Phase 14.
+
+On 25 test scenarios (hotspot pattern) (full log, including a corrected earlier claim, in [`docs/results.md`](docs/results.md)):
 
 | Method | Theft labels needed | Finds theft at unmetered transformers (AUC) | Error per transformer (MWh/week) | Error in total stolen energy |
 |---|---|---|---|---|

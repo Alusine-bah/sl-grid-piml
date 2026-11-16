@@ -42,10 +42,39 @@ class ScenarioConfig:
     fault_kw: tuple[float, float] = (40.0, 150.0)
     power_factor: float = 0.90
     exclude_buses: tuple[int, ...] = field(default_factory=tuple)
+    # "hotspot": theft in a few areas (the original design). "odisha": losses spread
+    # over the areas as in real Odisha feeders (see realdata.py), scaled to target_ntl.
+    pattern: str = "hotspot"
+    lt_technical: float = 0.06      # low-voltage technical loss inside the real DT losses
+    hotspot_threshold: float = 0.15  # "odisha": an area is labelled theft above this share
+
+
+def _odisha_shares(mean_load, allowed, cfg, rng):
+    """Stolen share for every area, following a randomly chosen real Odisha feeder.
+
+    The areas take loss fractions drawn from that feeder's transformers, minus the
+    low-voltage technical loss they contain, then all are scaled together so the
+    feeder steals `target_ntl` of its consumption (no area above `max_share`)."""
+    from slgrid.realdata import feeder_loss_patterns
+    pats = feeder_loss_patterns()
+    pat = pats[int(rng.integers(len(pats)))]
+    shares = np.clip(rng.choice(pat, size=len(allowed)) - cfg.lt_technical, 0.0, None)
+    if shares.sum() == 0:
+        shares = np.full(len(allowed), 0.01)
+    need = (cfg.target_ntl if cfg.target_ntl is not None else 0.25) * mean_load.sum()
+    w = mean_load[allowed]
+    for _ in range(100):
+        stolen = (shares * w).sum()
+        shares = np.minimum(shares * need / max(stolen, 1e-12), cfg.max_share)
+        if abs((shares * w).sum() - need) < 1e-9 * need:
+            break
+    return list(allowed), shares
 
 
 def _pick_hotspots(mean_load, allowed, cfg, rng):
     """Choose hotspot buses and the share of consumption stolen at each."""
+    if cfg.pattern == "odisha":
+        return _odisha_shares(mean_load, allowed, cfg, rng)
     order = list(rng.permutation(allowed))
     if cfg.target_ntl is None:
         idx = order[: cfg.n_theft_buses]
@@ -99,12 +128,13 @@ def inject(customers: pd.DataFrame, demand_p: pd.DataFrame, cfg: ScenarioConfig,
     for j, sh in zip(idx, shares):
         hourly = (sh * rng.normal(1.0, 0.05, size=n_t)).clip(0, 0.98)
         theft[:, j] = D[:, j] * hourly
-        labels.iloc[j, labels.columns.get_loc("is_theft")] = True
+        hot = sh >= cfg.hotspot_threshold if cfg.pattern == "odisha" else True
+        labels.iloc[j, labels.columns.get_loc("is_theft")] = bool(hot)
         labels.iloc[j, labels.columns.get_loc("theft_share")] = sh
     billed = D - theft
 
     fault = np.zeros((n_t, n_l))
-    remaining = [j for j in allowed if j not in set(idx)]
+    remaining = [j for j in allowed if j not in set(idx)] or list(allowed)
     fault_idx = rng.choice(remaining, size=min(cfg.n_fault_buses, len(remaining)), replace=False)
     for j in fault_idx:
         kw = rng.uniform(*cfg.fault_kw)
