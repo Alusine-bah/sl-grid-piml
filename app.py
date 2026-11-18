@@ -63,9 +63,9 @@ def usd_rates():
 
 @st.cache_data(show_spinner=False)
 def run_simulation(theft, n_meters, strategy, dropout, fault, days, seed, billing, bill_noise,
-                   shedding, mapping_error, ami):
+                   shedding, mapping_error, ami, pattern="odisha"):
     d = simulate_case(theft, n_meters, strategy, dropout, fault, days, seed, billing, bill_noise,
-                      shedding, mapping_error, ami)
+                      shedding, mapping_error, ami, theft_pattern=pattern)
     res = locate(d)
     return d, res, meter_list(d, res), large_customer_list(d, res)
 
@@ -303,7 +303,7 @@ def results_view(d, res, names, show_truth, key, meters=None, large=None):
            "Squares have a transformer meter. Triangle = substation. "
            "Blue diamonds = likely section of a detected cable fault.")
     if show_truth:
-        cap += " Green rings = true theft hotspots (known only in simulation)."
+        cap += " Green rings = areas with real theft (known only in simulation; with spread losses, more than 15% of consumption stolen)."
     st.caption(cap)
     st.altair_chart(feeder_map(d, res, names, show_truth), width="stretch", key=f"{key}_map")
 
@@ -646,6 +646,14 @@ with tab_sim:
         theft = c1.slider("Share of energy stolen", 0.05, 0.45, 0.25, 0.05, format="%.2f",
                           help="Sierra Leone's commercial losses are reported at 18-40%.")
         days = c1.select_slider("Days of data", [1, 2, 3, 5, 7], value=3)
+        pattern = c1.selectbox("Loss pattern", ["odisha", "hotspot"],
+                               format_func={"odisha": "Spread as on real feeders (Odisha data)",
+                                            "hotspot": "A few hotspots (easier, optimistic)"}.get,
+                               help="Real transformer accounts from Odisha, India show losses "
+                                    "spread over most transformer areas. 'A few hotspots' was the "
+                                    "earlier simulation and makes the method look better than it "
+                                    "is. With spread losses, an area counts as theft (green ring) "
+                                    "above 15% of its consumption.")
         n_meters = c2.slider("Transformer meters installed", 0, 16, 6)
         strategy = c2.selectbox("Where meters are placed", ["largest", "ends", "random"],
                                 help="Largest transformers is the recommended placement: with "
@@ -689,7 +697,7 @@ with tab_sim:
         with st.spinner("Simulating the feeder and locating losses..."):
             d, res, meters, large = run_simulation(theft, n_meters, strategy, dropout, fault, days,
                                                    int(seed), billing, bill_noise, shedding,
-                                                   mapping, ami)
+                                                   mapping, ami, pattern)
         results_view(d, res, None, show_truth=True, key="sim", meters=meters, large=large)
         with st.expander("Download this simulated feeder as utility CSV files"):
             st.write("These are the same files a utility would upload in the next tab "

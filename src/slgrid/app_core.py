@@ -19,7 +19,7 @@ def simulate_case(theft_level: float, n_meters: int, strategy: str, dropout: flo
                   fault: bool, n_days: int, seed: int, billing: str = "daily",
                   billing_noise: float = 0.03, shedding: str = "none",
                   mapping_error: float = 0.05, ami: bool = False,
-                  vending_history: int = 90) -> dict:
+                  vending_history: int = 90, theft_pattern: str = "hotspot") -> dict:
     """Simulate one feeder period and return it in the standard format (with truth).
 
     billing: "daily" (one value per day per bus) or "period" (one total per bus, as with
@@ -30,10 +30,12 @@ def simulate_case(theft_level: float, n_meters: int, strategy: str, dropout: flo
     the last 30 days of purchases. The records are kept in d["vending"].
     ami: the large customers at commercial transformer areas have smart meters with 28 days
     of hourly history, and some tamper where there is theft. Kept in d["ami"].
+    theft_pattern: "hotspot" (theft in a few areas) or "odisha" (losses spread over the
+    areas as on real Odisha feeders; an area counts as theft above 15% of its consumption).
     """
     cfg = DatasetConfig(n_scenarios=1, n_days=n_days, ntl_levels=(theft_level,),
                         fault_probability=1.0 if fault else 0.0, dropout=dropout, seed=seed,
-                        shedding=shedding)
+                        shedding=shedding, theft_pattern=theft_pattern)
     with tempfile.TemporaryDirectory() as tmp:
         d = dict(np.load(generate(cfg, tmp, name="case", progress=False)))
     buses = placement(d, n_meters, strategy, seed=seed)
